@@ -141,6 +141,8 @@ ui/
   logo.svg     app logo
   icons/       Tabler icons
 extension/     Chrome/Edge extension (Manifest V3)
+tools/         dev helpers (window screenshot script)
+CLAUDE.md      context for continuing development with an AI assistant
 ```
 
 ## Known limitations
