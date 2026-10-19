@@ -1,0 +1,3 @@
+/target
+# Release zips belong on the releases page, not in the repo.
+/dist
