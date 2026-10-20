@@ -47,7 +47,7 @@ cargo build --release      # target\release\idm.exe (stop the running app first;
 ```
 
 - **Stuck build.** If a build sits at "Blocking waiting for file lock", VS Code's rust-analyzer `cargo check` may be hung. Kill that `cargo check` process.
-- **Release zip.** Copy `idm.exe` and `extension/` into `dist/Downloader-<ver>-windows-x64/` and zip it. `dist/` is gitignored.
+- **Release zip.** Copy `idm.exe` and `extension/` into `dist/Downloader-<ver>-windows-x64/` and zip it. The zip is committed to git (the owner chose this over GitHub Releases); the staging folder is gitignored. Update the README download link to the new version.
 
 ## Testing the UI
 

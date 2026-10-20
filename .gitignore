@@ -1,3 +1,4 @@
 /target
-# Release zips belong on the releases page, not in the repo.
-/dist
+# Release zips are committed; the unzipped staging folders are not.
+/dist/*
+!/dist/*.zip

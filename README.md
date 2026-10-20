@@ -34,7 +34,7 @@
 
 ## Installation
 
-1. Download `Downloader-0.1.0-windows-x64.zip` from the releases page.
+1. Download [`Downloader-0.1.0-windows-x64.zip`](dist/Downloader-0.1.0-windows-x64.zip?raw=1) from the `dist` folder.
 2. Unzip it anywhere, for example `C:\Program Files\Downloader`.
 3. Run `idm.exe`.
 
