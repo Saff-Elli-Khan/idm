@@ -22,13 +22,18 @@ struct Settings {
 const MAX_CONNS: i32 = 32;
 
 /// `open`: a magnet link or .torrent path Windows launched us with.
-pub fn run(open: Option<String>) -> Result<()> {
+/// `background`: started at sign-in; stay in the tray without opening the window.
+pub fn run(open: Option<String>, background: bool) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     // Single instance: if our port is taken by a running copy (maybe hidden in the tray), show it and leave.
     // This must happen before the manager starts, or both copies would run the same downloads.
     let listener = rt.block_on(tokio::net::TcpListener::bind(("127.0.0.1", browser::PORT)));
-    if listener.is_err() && rt.block_on(browser::show_running(open.as_deref())) {
+    if listener.is_err() && (background || rt.block_on(browser::show_running(open.as_deref()))) {
+        // ponytail: a background start assumes whatever holds the port is us; ping it first if that misfires.
         return Ok(());
+    }
+    if autostart_enabled() {
+        set_autostart(true).ok(); // keeps the startup entry pointing at this exe if it was moved
     }
     let home = PathBuf::from(std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).unwrap_or_default());
     let data = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| home.join(".config")).join("idm");
@@ -49,6 +54,7 @@ pub fn run(open: Option<String>) -> Result<()> {
     let ui = AppWindow::new()?;
     ui.set_conns(s.conns as i32);
     ui.set_limit_text(if s.limit_mb > 0.0 { s.limit_mb.to_string().into() } else { "".into() });
+    ui.set_autostart(autostart_enabled());
     let save = {
         let ui = ui.as_weak();
         move || {
@@ -192,8 +198,20 @@ pub fn run(open: Option<String>) -> Result<()> {
         save();
     });
 
+    let win = ui.as_weak();
+    ui.on_set_autostart(move |on| {
+        if let Err(e) = set_autostart(on) {
+            eprintln!("{e:#}");
+        }
+        if let Some(ui) = win.upgrade() {
+            ui.set_autostart(autostart_enabled()); // show what Windows actually has
+        }
+    });
+
     // Hidden windows (closed to tray, Alt+F4) don't end the event loop; only Quit does.
-    ui.show()?;
+    if !background {
+        ui.show()?;
+    }
     slint::run_event_loop_until_quit()?;
     Ok(())
 }
@@ -249,11 +267,49 @@ fn refresh(ui: &AppWindow, m: &Manager, rows: &VecModel<Row>, tray: &TrayIcon) {
     }
 }
 
+/// Runs `reg.exe` without flashing a console window; `true` if it succeeded.
+#[cfg(windows)]
+fn reg(args: &[&str]) -> Result<bool> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let out = std::process::Command::new("reg").args(args).creation_flags(CREATE_NO_WINDOW).output()?;
+    Ok(out.status.success())
+}
+
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+
+/// Starting with Windows is read from the registry itself, so the switch can't drift from reality.
+#[cfg(windows)]
+fn autostart_enabled() -> bool {
+    reg(&["query", RUN_KEY, "/v", "IDM2"]).unwrap_or(false)
+}
+
+/// Adds or removes IDM2 from the current user's startup programs. It starts hidden in the tray.
+#[cfg(windows)]
+fn set_autostart(on: bool) -> Result<()> {
+    let ok = if on {
+        let cmd = format!("\"{}\" --background", std::env::current_exe()?.display());
+        reg(&["add", RUN_KEY, "/v", "IDM2", "/d", &cmd, "/f"])?
+    } else {
+        reg(&["delete", RUN_KEY, "/v", "IDM2", "/f"])? || !autostart_enabled()
+    };
+    anyhow::ensure!(ok, "couldn't update {RUN_KEY}");
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn autostart_enabled() -> bool {
+    false
+}
+
+#[cfg(not(windows))]
+fn set_autostart(_on: bool) -> Result<()> {
+    anyhow::bail!("only supported on Windows")
+}
+
 /// Makes IDM2 the handler for magnet links and .torrent files, for the current user only.
 #[cfg(windows)]
 fn register_handlers() -> Result<()> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let exe = std::env::current_exe()?;
     let open = format!("\"{}\" \"%1\"", exe.display());
     let icon = format!("\"{}\",0", exe.display());
@@ -269,13 +325,10 @@ fn register_handlers() -> Result<()> {
         (format!(r"{c}\IDM2.torrent\shell\open\command"), None, open.as_str()),
     ];
     for (key, name, data) in values {
-        let mut cmd = std::process::Command::new("reg");
-        cmd.args(["add", &key]);
-        match name {
-            Some(n) => cmd.args(["/v", n]),
-            None => cmd.arg("/ve"),
+        let ok = match name {
+            Some(n) => reg(&["add", &key, "/v", n, "/d", data, "/f"])?,
+            None => reg(&["add", &key, "/ve", "/d", data, "/f"])?,
         };
-        let ok = cmd.args(["/d", data, "/f"]).creation_flags(CREATE_NO_WINDOW).status()?.success();
         anyhow::ensure!(ok, "couldn't write {key}");
     }
     Ok(())

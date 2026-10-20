@@ -166,6 +166,29 @@ component Input inherits Rectangle {
     }
 }
 
+component Toggle inherits Rectangle {
+    in property <bool> checked;
+    callback toggled(bool);
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    background: root.checked ? Theme.accent : Theme.press;
+    animate background { duration: 120ms; }
+    Rectangle {
+        x: root.checked ? parent.width - self.width - 2px : 2px;
+        y: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: white;
+        animate x { duration: 120ms; easing: ease-out; }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(!root.checked); }
+    }
+}
+
 component RowView inherits Rectangle {
     in property <Row> item;
     callback pause();
@@ -375,6 +398,8 @@ export component AppWindow inherits Window {
     in-out property <int> conns: 8;
     callback set-conns(int);
     callback register-handlers() -> string;
+    in-out property <bool> autostart;
+    callback set-autostart(bool);
     property <string> handler-status;
     callback refresh();
     callback drag(length, length);
@@ -468,6 +493,16 @@ export component AppWindow inherits Window {
             if root.filter == 3: VerticalLayout {
                 vertical-stretch: 1;
                 alignment: start;
+                SettingRow {
+                    icon: @image-url("icons/power.svg");
+                    title: "Start with Windows";
+                    description: "IDM2 starts quietly in the tray when you sign in, so queued downloads resume and browser downloads are caught right away.";
+                    Toggle {
+                        checked: root.autostart;
+                        toggled(on) => { root.set-autostart(on); }
+                    }
+                }
+                Rectangle { height: 1px; background: Theme.border; }
                 SettingRow {
                     icon: @image-url("icons/network.svg");
                     title: "Connections per download";

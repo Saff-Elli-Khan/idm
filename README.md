@@ -9,6 +9,10 @@
   Multi-connection, resumable downloads with a clean, Notion-style interface.
 </p>
 
+<p align="center">
+  <a href="dist/IDM2-0.4.0-windows-x64.zip?raw=1"><b>⬇ Download IDM2 0.4.0 for Windows (64-bit)</b></a>
+</p>
+
 ![Downloads list with per-connection progress](docs/screenshots/downloads.png)
 
 ## Features
@@ -21,6 +25,7 @@
 - **Per-connection progress.** Click a download to see every connection with its own progress bar, bytes and speed.
 - **Global speed limit.** One cap shared by all downloads. It throttles at the network level, so it doesn't just buffer data in memory.
 - **Download queue.** Up to 3 downloads run at once and the rest wait their turn. The list survives restarts.
+- **Starts with Windows** (optional). IDM2 starts quietly in the tray when you sign in, so queued downloads resume and browser downloads are caught right away.
 - **Runs in the background.** Closing the window keeps downloads going; IDM2 lives in the system tray. Hover the tray icon for live progress, click it to reopen the window, or right-click it to quit. Starting IDM2 again brings up the running copy instead of opening a second one.
 - **Browser integration.** One small extension for Chrome, Edge and Firefox sends browser downloads to the app, including cookies and referrer, so downloads that need a login work too. If the app isn't running, the browser simply downloads the file itself.
 - **Torrents.** Download magnet links and `.torrent` files, with a live list of the peers you're downloading from. `.torrent` links clicked in the browser are fetched and started automatically. Seeding stops when a download finishes. IDM2 can also become the Windows handler for magnet links and `.torrent` files.
@@ -36,7 +41,7 @@
 
 ## Installation
 
-1. Download [`IDM2-0.3.0-windows-x64.zip`](dist/IDM2-0.3.0-windows-x64.zip?raw=1) from the `dist` folder.
+1. Download [`IDM2-0.4.0-windows-x64.zip`](dist/IDM2-0.4.0-windows-x64.zip?raw=1) from the `dist` folder.
 2. Unzip it anywhere, for example `C:\Program Files\IDM2`.
 3. Run `idm2.exe`.
 
@@ -76,6 +81,7 @@ Firefox removes temporary add-ons when it closes, because regular Firefox only i
 
 | Setting | Default | Notes |
 | --- | --- | --- |
+| Start with Windows | Off | Starts IDM2 in the tray (no window) when you sign in. Only for your Windows account; it appears in Task Manager → Startup apps as `idm2`. |
 | Connections per download | 8 | 1 to 32. Takes effect on running downloads too. Some servers limit how many connections they accept. |
 | Speed limit | Unlimited | In MB/s, shared by all downloads. Press Enter to apply; leave empty for unlimited. |
 
@@ -177,7 +183,6 @@ CLAUDE.md      context for continuing development with an AI assistant
 - **HTTP(S) and BitTorrent only.** No FTP or video-site downloading.
 - **Torrent limits.** There's no seeding, no picking individual files, and no separate upload limit. The speed limit applies to HTTP downloads and to torrents separately. Resuming a torrent re-checks the files already on disk first, which takes a moment for large torrents. Deleting a *paused* multi-file torrent leaves its folder in place.
 - **Firefox add-on isn't signed.** In regular Firefox it has to be reloaded after each restart (see above).
-- **No start with Windows.** IDM2 doesn't launch at login yet.
 - **Default exe icon.** `idm2.exe` doesn't carry the app logo in Explorer yet.
 
 ## Credits

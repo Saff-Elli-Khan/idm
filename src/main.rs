@@ -16,14 +16,18 @@ use std::time::Instant;
 
 /// `idm2` opens the GUI; `idm2 <url> [-n N] [-o out]` downloads in the terminal.
 /// `idm2 <magnet link or .torrent file>` (how Windows launches us for those) opens the GUI with it.
+/// `idm2 --background` (the startup entry) runs in the tray without opening the window.
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        return gui::run(None);
+        return gui::run(None, false);
     }
-    if let [src] = args.as_slice() {
-        if torrent::is_torrent(src) {
-            return gui::run(Some(src.clone()));
+    if let [arg] = args.as_slice() {
+        if arg == "--background" {
+            return gui::run(None, true); // started with Windows: tray only
+        }
+        if torrent::is_torrent(arg) {
+            return gui::run(Some(arg.clone()), false);
         }
     }
     attach_console();

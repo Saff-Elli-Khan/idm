@@ -38,6 +38,7 @@ An IDM-style download manager for Windows in Rust: a segmented, resumable HTTP e
 ## Background running
 
 - **Event loop.** `ui.show()` + `slint::run_event_loop_until_quit()`. Hiding the window (close button, Alt+F4) doesn't end the loop; only the tray's **Quit** calls `quit_event_loop`.
+- **Start with Windows.** The Settings switch writes or deletes `HKCU\...\CurrentVersion\Run` value `IDM2` = `"<exe>" --background` (via the `reg()` helper). The switch state is read from the registry itself, and each launch rewrites the path if the entry exists (so a moved exe keeps working). `--background` skips `ui.show()`, so only the tray appears. If the port is already taken, a background start exits quietly instead of popping the running window. When checking for a visible window, ignore winit's `Winit Thread Event Target` window: `Process.MainWindowHandle` can return it, and it reports visible even though it isn't shown.
 - **Tray.** `tray-icon` with a muda menu: *Open IDM2*, separator, *Quit*. Left click opens the window. The tooltip shows the summary line. The icon pixels come from `extension/icons/48.png` (decoded with the `png` crate). Event handlers run off the UI thread, so they use `Weak::upgrade_in_event_loop`.
 - **Single instance.** `gui::run` binds the port *before* creating the manager. If the bind fails and `POST /show` succeeds, a copy is already running, so this launch exits. Otherwise the second copy would run the same downloads twice.
 - **Bringing the window forward.** `show_window` calls hide then show so the window comes to the front.
@@ -67,7 +68,11 @@ cargo build --release      # target\release\idm2.exe (stop the running app first
 ```
 
 - **Stuck build.** If a build sits at "Blocking waiting for file lock", VS Code's rust-analyzer `cargo check` may be hung. Kill that `cargo check` process.
-- **Release zip.** Copy `idm2.exe` and `extension/` into `dist/IDM2-<ver>-windows-x64/` and zip it. Keep `Cargo.toml` and `extension/manifest.json` versions in sync. The zip is committed to git (the owner chose this over GitHub Releases); the staging folder is gitignored. Update the README download link to the new version.
+- **Release checklist (every new version):**
+  1. Bump the version in `Cargo.toml` and `extension/manifest.json`; they stay in sync.
+  2. `cargo build --release`, then copy `idm2.exe` and `extension/` into `dist/IDM2-<ver>-windows-x64/` and zip it.
+  3. **Update both README download links:** the "Download IDM2 <ver>" link at the top and the Installation step. The owner requires this for every version.
+  4. Commit the zip (the owner chose committed zips over GitHub Releases; the staging folder is gitignored). Never modify an already-released zip; make a new version instead.
 
 ## Testing the UI
 
@@ -128,7 +133,6 @@ Then check that `%APPDATA%\idm\downloads.json` gained the URL with a `User-Agent
 
 ## Backlog / known limitations
 
-- No start with Windows (login autostart) yet.
 - The tray menu (Open, Quit) has been tested only by its code path, not by clicking it.
 - The save folder (`Downloads`) and simultaneous downloads (3) are hard-coded; they are candidates for the Settings page.
 - `idm2.exe` has no embedded icon; it needs an `.ico` and a resource step in `build.rs`.
