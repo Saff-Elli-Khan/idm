@@ -1,6 +1,6 @@
 [package]
 name = "idm"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 
 # The product is IDM2; the crate (and the %APPDATA%\idm data folder) keep the old name.
@@ -23,6 +23,7 @@ tray-icon = "0.26"
 
 [build-dependencies]
 slint-build = "1"
+winresource = "0.1"
 
 [dev-dependencies]
 tower-http = { version = "0.6", features = ["fs"] }

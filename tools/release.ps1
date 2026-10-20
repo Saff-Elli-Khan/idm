@@ -1,6 +1,7 @@
 # Builds dist\IDM2-<version>-windows-x64.zip from the version in Cargo.toml:
 #   idm2.exe, extension\ (Chrome/Edge) and extension-firefox\ (manifest.firefox.json as its manifest.json).
 # Refuses to package if the extension manifests or the README download links aren't on that version.
+# Afterwards, older Windows builds are deleted from dist\ (only the latest is kept).
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot)
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
@@ -30,3 +31,9 @@ Copy-Item extension\manifest.json "$stage\extension\manifest.json" -Force
 Copy-Item extension\manifest.firefox.json "$stage\extension-firefox\manifest.json" -Force
 Compress-Archive -Path "$stage\*" -DestinationPath "dist\$zip"
 "Packaged dist\$zip ($([math]::Round((Get-Item "dist\$zip").Length / 1MB, 1)) MB)"
+
+# dist\ keeps only the latest Windows build; older versions live in git history / GitHub releases.
+Get-ChildItem dist | Where-Object { $_.Name -like "*-windows-x64*" -and $_.Name -notlike "IDM2-$version-windows-x64*" } | ForEach-Object {
+    Remove-Item -LiteralPath $_.FullName -Recurse -Force
+    "Removed old build dist\$($_.Name)"
+}

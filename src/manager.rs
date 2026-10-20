@@ -135,8 +135,11 @@ impl Manager {
     pub fn pause(&self, id: u64) {
         let mut st = self.0.st.lock().unwrap();
         if let Some(stop) = st.stops.get(&id) {
-            stop.store(true, Relaxed); // the task marks it Paused when it winds down
-        } else if let Some(it) = st.items.iter_mut().find(|i| i.id == id && i.status == Status::Queued) {
+            stop.store(true, Relaxed);
+        }
+        // Save the user's choice now, not when the task winds down: a stalled connection can take a
+        // while to notice, and if the app exits meanwhile the item must not resume on the next start.
+        if let Some(it) = st.items.iter_mut().find(|i| i.id == id && matches!(i.status, Status::Downloading | Status::Queued)) {
             it.status = Status::Paused;
             self.save(&st);
         }
@@ -182,7 +185,8 @@ impl Manager {
             if active >= self.0.max_active {
                 break;
             }
-            if st.items[i].status != Status::Queued {
+            // Resumed while its previous run is still winding down: wait for that run to end.
+            if st.items[i].status != Status::Queued || st.stops.contains_key(&st.items[i].id) {
                 continue;
             }
             let it = &mut st.items[i];
@@ -219,6 +223,7 @@ impl Manager {
                         }
                         Status::Done
                     }
+                    Ok(false) if it.status == Status::Queued => Status::Queued, // resumed during wind-down; pump restarts it
                     Ok(false) => Status::Paused,
                     Err(e) => {
                         it.error = Some(format!("{e:#}"));
@@ -366,6 +371,41 @@ mod tests {
         drop(m);
         let m = Manager::new(Handle::current(), dir.clone(), db, 1, 4).unwrap();
         assert!(m.items().len() == 3 && m.items().iter().all(|i| i.status == Status::Done));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A pause is saved at once and survives a restart (e.g. the app starting with Windows).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn paused_download_stays_paused_after_restart() {
+        let dir = std::env::temp_dir().join(format!("idm-pause-{}", std::process::id()));
+        let srv = dir.join("srv");
+        fs::create_dir_all(&srv).unwrap();
+        fs::write(srv.join("big.bin"), vec![7u8; 8 << 20]).unwrap();
+        let url = engine::tests::serve(&srv).await + "/big.bin";
+        let db = dir.join("downloads.json");
+
+        let m = Manager::new(Handle::current(), dir.clone(), db.clone(), 3, 4).unwrap();
+        m.set_limit(1 << 20); // 1 MiB/s, so it's still running when we pause
+        let id = m.add(url, vec![]);
+        for _ in 0..100 {
+            if m.items()[0].done > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(m.items()[0].status, Status::Downloading);
+        m.pause(id);
+        let saved: Vec<Item> = serde_json::from_slice(&fs::read(&db).unwrap()).unwrap();
+        assert_eq!(saved[0].status, Status::Paused, "pause must be on disk immediately");
+
+        tokio::time::sleep(Duration::from_secs(2)).await; // old run winds down
+        let part = with_ext(&dir.join("big.bin"), ".part.json");
+        let progress = fs::read(&part).unwrap();
+        drop(m);
+        let m = Manager::new(Handle::current(), dir.clone(), db, 3, 4).unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(m.items()[0].status, Status::Paused, "restart must not resume a paused download");
+        assert_eq!(fs::read(&part).unwrap(), progress, "nothing was downloaded after the restart");
         fs::remove_dir_all(&dir).ok();
     }
 }

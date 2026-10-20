@@ -195,6 +195,7 @@ component RowView inherits Rectangle {
     callback resume();
     callback remove();
     callback open();
+    callback launch();
     // Notion "select" tag colors
     property <color> tone: root.item.status == "Downloading" ? Theme.accent
         : root.item.status == "Completed" ? Theme.green
@@ -207,7 +208,14 @@ component RowView inherits Rectangle {
     background: ta.has-hover || root.expanded ? Theme.hover : transparent;
     ta := TouchArea {
       mouse-cursor: pointer;
-      clicked => { root.expanded = !root.expanded; }
+      // A finished download opens on click; others expand to show their connections.
+      clicked => {
+          if root.item.done {
+              root.launch();
+          } else {
+              root.expanded = !root.expanded;
+          }
+      }
       VerticalLayout {
         HorizontalLayout {
             height: 62px;
@@ -312,6 +320,7 @@ component RowView inherits Rectangle {
                 alignment: center;
                 Icon {
                     source: @image-url("icons/chevron-down.svg");
+                    visible: !root.item.done;
                     size: 16px;
                     colorize: Theme.muted;
                     transform-rotation: root.expanded ? 180deg : 0deg;
@@ -393,11 +402,15 @@ export component AppWindow inherits Window {
     callback resume(int);
     callback remove(int);
     callback open(int);
+    callback launch(int);
     callback set-limit(string);
     in-out property <string> limit-text;
     in-out property <int> conns: 8;
     callback set-conns(int);
     callback register-handlers() -> string;
+    // Set from Rust per platform: Windows-only settings, and our own window frame (macOS keeps its native one).
+    in property <bool> is-windows: true;
+    in property <bool> custom-frame: true;
     in-out property <bool> autostart;
     callback set-autostart(bool);
     property <string> handler-status;
@@ -408,7 +421,7 @@ export component AppWindow inherits Window {
     callback close-window();
     property <bool> adding;
 
-    no-frame: true;
+    no-frame: root.custom-frame;
     title: "IDM2";
     icon: @image-url("logo.svg");
     preferred-width: 1040px;
@@ -495,8 +508,8 @@ export component AppWindow inherits Window {
                 alignment: start;
                 SettingRow {
                     icon: @image-url("icons/power.svg");
-                    title: "Start with Windows";
-                    description: "IDM2 starts quietly in the tray when you sign in, so queued downloads resume and browser downloads are caught right away.";
+                    title: root.is-windows ? "Start with Windows" : "Open at login";
+                    description: root.is-windows ? "IDM2 starts quietly in the tray when you sign in, so queued downloads resume and browser downloads are caught right away." : "IDM2 opens quietly in the menu bar when you log in, so queued downloads resume and browser downloads are caught right away.";
                     Toggle {
                         checked: root.autostart;
                         toggled(on) => { root.set-autostart(on); }
@@ -552,6 +565,8 @@ export component AppWindow inherits Window {
                     description: "Load the extension folder in Chrome, Edge or Firefox to send browser downloads here.";
                     Text { text: root.browser-status; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
                 }
+                // Registering handlers writes the Windows registry; macOS would need it in the app bundle instead.
+                if root.is-windows: VerticalLayout {
                 Rectangle { height: 1px; background: Theme.border; }
                 SettingRow {
                     icon: @image-url("icons/magnet.svg");
@@ -562,6 +577,7 @@ export component AppWindow inherits Window {
                         text: "Use IDM2";
                         clicked => { root.handler-status = root.register-handlers(); }
                     }
+                }
                 }
             }
             if root.filter != 3: Flickable {
@@ -576,6 +592,7 @@ export component AppWindow inherits Window {
                         resume => { root.resume(r.id); }
                         remove => { root.remove(r.id); }
                         open => { root.open(r.id); }
+                        launch => { root.launch(r.id); }
                     }
                     if root.rows.length == 0: VerticalLayout {
                         padding-top: 80px;
@@ -603,7 +620,7 @@ export component AppWindow inherits Window {
     }
 
     // Frameless window: the top strip moves the window, double-click maximizes.
-    TouchArea {
+    if root.custom-frame: TouchArea {
         x: 0;
         y: 0;
         width: root.width - 138px;
@@ -611,7 +628,7 @@ export component AppWindow inherits Window {
         moved => { root.drag(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); }
         double-clicked => { root.toggle-maximize(); }
     }
-    HorizontalLayout {
+    if root.custom-frame: HorizontalLayout {
         x: root.width - 138px;
         y: 0;
         width: 138px;

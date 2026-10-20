@@ -54,6 +54,7 @@ async fn add(State(app): State<App>, h: HeaderMap, Json(a): Json<Add>) -> Status
         .filter_map(|(k, v)| Some((k.to_string(), v.filter(|v| !v.is_empty())?)))
         .collect();
     app.m.add(a.url, headers);
+    (app.show)(); // the browser shows nothing once we take the download over, so let the user see it started
     StatusCode::OK
 }
 
@@ -93,14 +94,16 @@ mod tests {
         let add = |origin: &'static str| reqwest::Client::new().post(format!("{base}/add")).header("Origin", origin).json(&body).send();
         assert_eq!(add("https://evil.example").await.unwrap().status(), 403);
         assert!(m.items().is_empty());
+        assert_eq!(shown.load(Ordering::Relaxed), 0, "a rejected request must not pop the window");
         assert_eq!(add("chrome-extension://abc").await.unwrap().status(), 200);
         let items = m.items();
         assert!(items.len() == 1 && items[0].headers == [("Cookie".to_string(), "a=b".to_string())]);
+        assert_eq!(shown.load(Ordering::Relaxed), 1, "an accepted browser download shows the window");
 
         let show = || reqwest::Client::new().post(format!("{base}/show"));
         assert_eq!(show().header("Origin", "https://evil.example").send().await.unwrap().status(), 403);
         assert_eq!(show().send().await.unwrap().status(), 200);
-        assert_eq!(shown.load(Ordering::Relaxed), 1);
+        assert_eq!(shown.load(Ordering::Relaxed), 2);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

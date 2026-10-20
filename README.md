@@ -5,12 +5,13 @@
 <h1 align="center">IDM2</h1>
 
 <p align="center">
-  A fast, modern download manager for Windows, written in Rust.<br>
+  A fast, modern download manager for Windows and macOS, written in Rust.<br>
   Multi-connection, resumable downloads with a clean, Notion-style interface.
 </p>
 
 <p align="center">
-  <a href="dist/IDM2-0.4.1-windows-x64.zip?raw=1"><b>⬇ Download IDM2 0.4.1 for Windows (64-bit)</b></a>
+  <a href="dist/IDM2-0.5.0-windows-x64.zip?raw=1"><b>⬇ Download IDM2 0.5.0 for Windows (64-bit)</b></a><br>
+  macOS (Apple Silicon and Intel): see <a href="#macos">Installation → macOS</a>
 </p>
 
 ![Downloads list with per-connection progress](docs/screenshots/downloads.png)
@@ -25,12 +26,13 @@
 - **Per-connection progress.** Click a download to see every connection with its own progress bar, bytes and speed.
 - **Global speed limit.** One cap shared by all downloads. It throttles at the network level, so it doesn't just buffer data in memory.
 - **Download queue.** Up to 3 downloads run at once and the rest wait their turn. The list survives restarts.
-- **Starts with Windows** (optional). IDM2 starts quietly in the tray when you sign in, so queued downloads resume and browser downloads are caught right away.
+- **Starts at login** (optional). IDM2 starts quietly in the tray (the menu bar on macOS) when you sign in, so queued downloads resume and browser downloads are caught right away.
 - **Runs in the background.** Closing the window keeps downloads going; IDM2 lives in the system tray. Hover the tray icon for live progress, click it to reopen the window, or right-click it to quit. Starting IDM2 again brings up the running copy instead of opening a second one.
-- **Browser integration.** One small extension for Chrome, Edge and Firefox sends browser downloads to the app, including cookies and referrer, so downloads that need a login work too. If the app isn't running, the browser simply downloads the file itself.
+- **Browser integration.** One small extension for Chrome, Edge and Firefox sends browser downloads to the app, including cookies and referrer, so downloads that need a login work too. IDM2's window pops up so you can see the download started. If the app isn't running, the browser simply downloads the file itself.
 - **Torrents.** Download magnet links and `.torrent` files, with a live list of the peers you're downloading from. `.torrent` links clicked in the browser are fetched and started automatically. Seeding stops when a download finishes. IDM2 can also become the Windows handler for magnet links and `.torrent` files.
 - **Automatic retries.** Dropped connections retry with backoff. If a server refuses extra connections, the remaining ones carry on.
-- **Light and dark mode.** Follows your Windows theme.
+- **Light and dark mode.** Follows your system theme.
+- **Windows and macOS.** One universal macOS app runs natively on Apple Silicon and Intel Macs.
 - **Command-line mode.** `idm2 <url>` downloads from the terminal with live progress.
 
 ## Screenshots
@@ -41,13 +43,29 @@
 
 ## Installation
 
-1. Download [`IDM2-0.4.1-windows-x64.zip`](dist/IDM2-0.4.1-windows-x64.zip?raw=1) from the `dist` folder.
+### Windows
+
+1. Download [`IDM2-0.5.0-windows-x64.zip`](dist/IDM2-0.5.0-windows-x64.zip?raw=1) from the `dist` folder.
 2. Unzip it anywhere, for example `C:\Program Files\IDM2`.
 3. Run `idm2.exe`.
 
 The app isn't code-signed yet, so Windows SmartScreen may warn the first time you run it. Click **More info**, then **Run anyway**.
 
 Windows 11 puts new tray icons in the hidden overflow (the **^** next to the clock). To keep IDM2 visible, drag its icon onto the taskbar.
+
+### macOS
+
+macOS 11 (Big Sur) or later, on Apple Silicon or Intel.
+
+1. Get `IDM2-<version>-macos-universal.zip`. It's built automatically on every push to `main`: open the repository's **Actions** tab, pick the latest **Build** run and download **idm2-macos-universal** under *Artifacts*. GitHub delivers artifacts zipped, so unzip twice.
+2. Drag **IDM2.app** into **Applications**.
+3. Open it. The app isn't notarized by Apple yet, so the first time macOS says it can't verify the developer. Go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. On older macOS, right-click the app and choose **Open** instead.
+
+Differences on macOS:
+
+- IDM2 lives in the **menu bar** rather than a system tray, and the window keeps the standard macOS title bar.
+- The startup option is called **Open at login**.
+- Making IDM2 the default app for magnet links and `.torrent` files is Windows-only for now. On a Mac, paste magnet links into *New download*; `.torrent` files downloaded in the browser still start automatically.
 
 ### Browser extension
 
@@ -71,8 +89,8 @@ Firefox removes temporary add-ons when it closes, because regular Firefox only i
 ### App
 
 - **New download:** paste a link, a magnet link or the path of a `.torrent` file, and press Enter. Files are saved to your `Downloads` folder; if a file with the same name exists, the new one is saved as `name (1).ext`.
+- **Click a finished download** to open it, just like double-clicking it in File Explorer. Click a download in progress to see each connection.
 - **Hover a download** for actions: pause, resume, show in folder, delete. Deleting an unfinished download also deletes its partial file; finished files are kept.
-- **Click a download** to expand it and see each connection.
 - **Sidebar:** switch between *All downloads*, *In progress* and *Completed*.
 - **Window:** drag the top strip to move it, double-click to maximize.
 - **Closing** the window hides IDM2 to the tray and downloads continue. To exit completely, right-click the tray icon and choose **Quit**. Unfinished downloads resume on the next start.
@@ -142,11 +160,12 @@ The browser extension talks to the app on `127.0.0.1:47219`. The app accepts req
 
 ## Building from source
 
-Requirements: Rust (stable) and, on Windows, the Visual Studio C++ Build Tools.
+Requirements: Rust (stable); on Windows also the Visual Studio C++ Build Tools, on macOS the Xcode Command Line Tools.
 
 ```powershell
 cargo build --release      # target\release\idm2.exe
 cargo test                 # engine, queue, browser-endpoint and torrent tests
+.\tools\release.ps1         # Windows release zip in dist\ (checks versions and README links)
 ```
 
 The tests run against a local HTTP server and cover:
@@ -173,17 +192,21 @@ ui/
   logo.svg     app logo
   icons/       Tabler icons
 extension/     browser extension (Manifest V3): manifest.json for Chrome/Edge, manifest.firefox.json for Firefox
-tools/         release.ps1 (builds the release zip), screenshot.ps1 (UI checks)
+macos/         Info.plist template and app icon (idm2.icns) for the .app bundle
+tools/         release.ps1 / release-macos.sh (release zips), screenshot.ps1 (UI checks)
+.github/       CI: tests and builds Windows + macOS on every push
 CLAUDE.md      context for continuing development with an AI assistant
 ```
+
+On a Mac, `bash tools/release-macos.sh` builds `dist/IDM2-<version>-macos-universal.zip` (a universal `IDM2.app` plus both extensions). The **Build** workflow in `.github/workflows/build.yml` runs the tests and builds both platforms on every push to `main`.
 
 ## Known limitations
 
 - **Fixed defaults.** The save folder (`Downloads`) and the number of simultaneous downloads (3) can't be changed yet.
 - **HTTP(S) and BitTorrent only.** No FTP or video-site downloading.
 - **Torrent limits.** There's no seeding, no picking individual files, and no separate upload limit. The speed limit applies to HTTP downloads and to torrents separately. Resuming a torrent re-checks the files already on disk first, which takes a moment for large torrents. Deleting a *paused* multi-file torrent leaves its folder in place.
+- **macOS app isn't notarized**, so the first launch needs **Open Anyway** (see Installation). It was compile-checked for both Mac architectures and is built and tested on GitHub's macOS runners, but hasn't been tried on a real Mac yet.
 - **Firefox add-on isn't signed.** In regular Firefox it has to be reloaded after each restart (see above).
-- **Default exe icon.** `idm2.exe` doesn't carry the app logo in Explorer yet.
 
 ## Credits
 

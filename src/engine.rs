@@ -275,7 +275,13 @@ impl Shared {
             if fails > RETRIES {
                 return Err(e);
             }
-            tokio::time::sleep(Duration::from_secs(1 << fails)).await;
+            // Back off, but notice a pause within a second.
+            for _ in 0..1u64 << fails {
+                if self.stop.load(Relaxed) {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
         }
     }
 
@@ -300,11 +306,8 @@ impl Shared {
         if !range_ok {
             bail!("server did not honor range {pos}-{end}");
         }
-        let mut body = resp.bytes_stream();
-        while let Some(chunk) = body.next().await {
-            if self.stop.load(Relaxed) {
-                return Ok(());
-            }
+        let mut body = std::pin::pin!(resp.bytes_stream());
+        while let Some(chunk) = next_or_stop(&mut body, &self.stop).await {
             let chunk = chunk?;
             self.limit.take(chunk.len()).await;
             // `end` only shrinks (another connection stole the tail), so re-read it every chunk.
@@ -319,6 +322,9 @@ impl Shared {
             if pos >= segs[i].end {
                 return Ok(());
             }
+        }
+        if self.stop.load(Relaxed) {
+            return Ok(());
         }
         bail!("connection closed at byte {pos}")
     }
@@ -372,14 +378,9 @@ async fn single(
 ) -> Result<bool> {
     let part = with_ext(out, ".part");
     let mut file = File::create(&part)?;
-    let mut body = client.get(&info.url).send().await?.error_for_status()?.bytes_stream();
+    let mut body = std::pin::pin!(client.get(&info.url).send().await?.error_for_status()?.bytes_stream());
     let (mut done, mut last) = (0, Instant::now());
-    while let Some(chunk) = body.next().await {
-        if stop.load(Relaxed) {
-            drop(file);
-            fs::remove_file(&part).ok();
-            return Ok(false);
-        }
+    while let Some(chunk) = next_or_stop(&mut body, stop).await {
         let chunk = chunk?;
         limit.take(chunk.len()).await;
         file.write_all(&chunk)?;
@@ -391,12 +392,31 @@ async fn single(
             last = Instant::now();
         }
     }
+    if stop.load(Relaxed) {
+        drop(file);
+        fs::remove_file(&part).ok();
+        return Ok(false);
+    }
     if info.total.is_some_and(|t| t != done) {
         bail!("connection closed at byte {done}");
     }
     drop(file);
     fs::rename(&part, out)?;
     Ok(true)
+}
+
+/// The next chunk, or `None` once the stream ends or `stop` is set. `stop` is checked every second
+/// even while the connection is stalled, so a pause never waits for the read timeout.
+async fn next_or_stop<S: futures_util::Stream + Unpin>(body: &mut S, stop: &AtomicBool) -> Option<S::Item> {
+    loop {
+        if stop.load(Relaxed) {
+            return None;
+        }
+        // `next()` is cancel-safe, so timing out loses no data.
+        if let Ok(item) = tokio::time::timeout(Duration::from_secs(1), body.next()).await {
+            return item;
+        }
+    }
 }
 
 fn split(total: u64, n: usize) -> Vec<Seg> {

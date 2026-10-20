@@ -2,7 +2,7 @@
 
 **IDM2** is the product name; use it everywhere users see a name (window title, sidebar, tray, extension, README, release zip). The exe and CLI command are `idm2` (`[[bin]]` in Cargo.toml); the crate name and the data folder (`%APPDATA%\idm`) keep `idm` so existing users' data carries over.
 
-An IDM-style download manager for Windows in Rust: a segmented, resumable HTTP engine with a Slint GUI. See README.md for user-facing docs.
+An IDM-style download manager for Windows and macOS in Rust: a segmented, resumable HTTP engine with a Slint GUI. See README.md for user-facing docs.
 
 ## Goals and preferences
 
@@ -22,7 +22,7 @@ An IDM-style download manager for Windows in Rust: a segmented, resumable HTTP e
 | `src/gui.rs` | Connects Slint to the manager; refreshes rows every 500 ms; `settings.json`; window controls; tray icon. See "Background running" below. |
 | `src/main.rs` | No arguments opens the GUI; a single magnet link or `.torrent` path (how Windows launches us for those) opens the GUI with it; `idm2 <url> [-n N] [-o out]` runs the CLI. Release builds are GUI-subsystem; the CLI calls `AttachConsole`. |
 | `ui/app.slint` | The whole UI: `Theme` global, `RowView`, `SettingRow`, `AppWindow`. `filter`: 0 = all, 1 = in progress, 2 = completed, 3 = settings page. |
-| `ui/logo.svg` | The logo. `extension/icons/*.png` are rendered from it. |
+| `ui/logo.svg` | The logo. `extension/icons/*.png` and `ui/idm2.ico` (16–256 px, PNG entries) are rendered from it. `build.rs` embeds the `.ico` plus ProductName/FileDescription "IDM2" into the exe via `winresource`, which is what Explorer, the taskbar and Task Manager's Startup apps show. |
 | `extension/` | MV3 extension. It catches `downloads.onCreated`, posts url, cookies, referrer and user agent, and cancels the browser's copy only if the app returns 200. `background.js` and `icons/` are shared by two manifests: `manifest.json` for Chrome and Edge (`service_worker` only) and `manifest.firefox.json` for Firefox (`background.scripts` plus `browser_specific_settings.gecko`: id, min 121, `data_collection_permissions: none`). Don't merge them: Chrome warns about `background.scripts` and the gecko key. `tools/release.ps1` packages them as `extension/` and `extension-firefox/`. The JS uses `globalThis.browser ?? chrome`. |
 
 ## Torrents (don't break)
@@ -55,7 +55,26 @@ An IDM-style download manager for Windows in Rust: a segmented, resumable HTTP e
 - **Honest user agent** `idm/<version>`. Bot filters drop fake-Chrome clients, e.g. Hetzner. Browser downloads override it with the browser's own user agent.
 - **Resume check.** Saved state is used only if `total` and `validator` (ETag or Last-Modified) still match; otherwise the download restarts from scratch.
 - **Retries.** Up to 5 consecutive failures without progress, backing off 2 to 32 s. A worker that gives up releases its range for the others. The whole download fails only when no worker is left and bytes remain.
+- **Pause is saved immediately.** `Manager::pause` writes `Paused` to `downloads.json` at once instead of waiting for the task to wind down. Otherwise quitting (or Windows restarting) during wind-down saved `Downloading`, and the next start resumed a paused download; the owner hit this. The engine notices `stop` within about 1 s even on a stalled connection (`next_or_stop`) or during retry backoff. A resume during wind-down leaves the item `Queued` and `pump` skips ids still in `stops`, so a download never runs twice. Covered by `paused_download_stays_paused_after_restart`.
 - **Speed limit.** One global `Limiter` (virtual scheduling) is awaited per chunk before writing. Not reading the socket applies TCP backpressure to the server.
+
+## macOS
+
+- **Platform code** lives behind `cfg` in `gui.rs`:
+  - **Data folder:** `~/Library/Application Support/IDM2`.
+  - **Open at login:** a LaunchAgent plist in `~/Library/LaunchAgents/io.github.saff-elli-khan.idm2.plist`, run with `--background`.
+  - **Show in folder:** `open -R` reveals the file in Finder; `open` launches it.
+- **UI flags:**
+  - `is-windows` hides the Windows-only magnet/.torrent registration row and changes the startup label to "Open at login".
+  - `custom-frame` is false on macOS, so the window keeps the native title bar and our window buttons and drag strip are hidden.
+- **Tray / menu bar.** The icon is created in `Timer::single_shot(Duration::ZERO)` (stored in `Rc<RefCell<Option<TrayIcon>>>`), because macOS only allows creating it once the event loop runs. Windows uses the same path.
+- **Not done yet:** handling magnet / `.torrent` "open" events on macOS. Those arrive as Apple Events (needing `CFBundleURLTypes` plus an app-delegate hook), not as command-line arguments.
+- **Packaging.** `tools/release-macos.sh` runs on a Mac or in CI only. It builds both architectures, `lipo`s them into one universal binary, assembles `IDM2.app` (`macos/Info.plist` with `@VERSION@` replaced, `macos/idm2.icns`), ad-hoc `codesign`s it (Apple Silicon requires a signature), and zips the app with both extensions into `dist/IDM2-<ver>-macos-universal.zip`. It isn't notarized; that needs an Apple Developer ID.
+- **CI.** `.github/workflows/build.yml` runs `cargo test` and builds on `windows-latest` and `macos-latest` for pushes to `main`, uploading `idm2-windows-x64` and `idm2-macos-universal` artifacts. This is the only real macOS build and test; nobody has run the app on a real Mac yet.
+- **Compile-checking for macOS from this Windows PC.** `aws-lc-sys` (via librqbit → reqwest → rustls) needs a C compiler for the target. Zig works as one (installed with winget; it lives under `%LOCALAPPDATA%\Microsoft\WinGet\Packages\zig.zig_*`):
+  1. Write a small `.cmd` wrapper that runs `zig cc -target aarch64-macos` (or `x86_64-macos`), dropping the `-arch X`, `-mmacosx-version-min=…` and `--target=…` flags that `cc` passes.
+  2. Set `CC_aarch64_apple_darwin` / `CC_x86_64_apple_darwin` to that wrapper and `AR_*` to a wrapper around `zig ar`.
+  3. Run `cargo check --target aarch64-apple-darwin` and `cargo check --target x86_64-apple-darwin` with `CARGO_TARGET_DIR=target\maccheck`. Both were clean at v0.5.0.
 
 ## Commands
 
@@ -72,7 +91,8 @@ cargo build --release      # target\release\idm2.exe (stop the running app first
   1. Bump the version in `Cargo.toml`, `extension/manifest.json` and `extension/manifest.firefox.json`.
   2. **Update both README download links:** the "Download IDM2 <ver>" link at the top and the Installation step. The owner requires this for every version.
   3. Run `tools\release.ps1`. It refuses if the versions or README links don't match, or if that version's zip already exists. It builds and writes `dist\IDM2-<ver>-windows-x64.zip` containing `idm2.exe`, `extension\` (Chrome/Edge) and `extension-firefox\`.
-  4. Commit the zip (the owner chose committed zips over GitHub Releases; the staging folder is gitignored). Never modify an already-released zip; make a new version instead.
+  4. Commit the zip. `dist/` keeps **only the latest** build: the script deletes older ones, and history lives in git and (later) GitHub releases. The staging folder is gitignored. Never rebuild a released version's zip; bump the version instead.
+- **macOS release:** on a Mac run `bash tools/release-macos.sh`; otherwise download the `idm2-macos-universal` artifact from the latest **Build** workflow run. It keeps only the latest macOS build in `dist/` too.
 - **Static C runtime.** `.cargo/config.toml` sets `+crt-static`, so `idm2.exe` doesn't need the Visual C++ Redistributable (without it, other PCs show "VCRUNTIME140.dll was not found"). Check with `dumpbin /dependents target\release\idm2.exe`: no `VCRUNTIME*`, `MSVCP*` or `api-ms-win-crt-*` should appear.
 
 ## Testing the UI
@@ -131,13 +151,13 @@ Then check that `%APPDATA%\idm\downloads.json` gained the URL with a `User-Agent
 - **Per-connection view:** the file-map bar was removed at the owner's request. Only per-connection rows remain, and their numbers are relative to each connection's own range.
 - **Settings page:** holds connections per download (1–32, default 8), the speed limit (MB/s), and browser status.
 - **Name:** the app was renamed from "Downloader" to **IDM2** at the owner's request (v0.2.0).
-- **Release zips** are committed to the repo under `dist/` (the owner chose this over GitHub Releases).
+- **Release zips:** only the latest one is committed under `dist/`; older versions are deleted (the owner plans GitHub releases for history).
 
 ## Backlog / known limitations
 
 - The tray menu (Open, Quit) has been tested only by its code path, not by clicking it.
 - The save folder (`Downloads`) and simultaneous downloads (3) are hard-coded; they are candidates for the Settings page.
-- `idm2.exe` has no embedded icon; it needs an `.ico` and a resource step in `build.rs`.
+- The exe isn't code-signed, so Windows SmartScreen shows "Unknown publisher". Options discussed with the owner (no decision yet): SignPath Foundation (free for open source), Certum Open Source certificate, Azure Trusted Signing, Microsoft Store. The free open-source routes need a LICENSE file, which the repo doesn't have yet.
 - Adaptive connections are not done yet: backing off to what a server accepts when it refuses extra connections.
 - `Content-Disposition` `filename*=` (RFC 5987) isn't parsed, and URL-derived names aren't percent-decoded.
 - The Firefox add-on isn't signed by Mozilla, so it loads only temporarily in regular Firefox. The exe isn't code-signed either.

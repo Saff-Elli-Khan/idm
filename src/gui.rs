@@ -4,6 +4,7 @@ use crate::torrent;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -35,8 +36,12 @@ pub fn run(open: Option<String>, background: bool) -> Result<()> {
     if autostart_enabled() {
         set_autostart(true).ok(); // keeps the startup entry pointing at this exe if it was moved
     }
-    let home = PathBuf::from(std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).unwrap_or_default());
-    let data = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| home.join(".config")).join("idm");
+    let home = home_dir();
+    let data = if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/IDM2")
+    } else {
+        std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| home.join(".config")).join("idm")
+    };
     let downloads = home.join("Downloads");
     std::fs::create_dir_all(&data)?;
     std::fs::create_dir_all(&downloads)?;
@@ -52,6 +57,9 @@ pub fn run(open: Option<String>, background: bool) -> Result<()> {
     m.set_limit(mb_to_bytes(s.limit_mb));
 
     let ui = AppWindow::new()?;
+    ui.set_is_windows(cfg!(windows));
+    // macOS keeps its native title bar (traffic lights); elsewhere we draw our own Notion-style controls.
+    ui.set_custom_frame(!cfg!(target_os = "macos"));
     ui.set_conns(s.conns as i32);
     ui.set_limit_text(if s.limit_mb > 0.0 { s.limit_mb.to_string().into() } else { "".into() });
     ui.set_autostart(autostart_enabled());
@@ -80,33 +88,16 @@ pub fn run(open: Option<String>, background: bool) -> Result<()> {
         Err(e) => format!("Off: {e}").into(),
     });
 
-    // Tray: closing the window only hides it; downloads keep running until Quit.
-    let open = MenuItem::new("Open IDM2", true, None);
-    let quit = MenuItem::new("Quit", true, None);
-    let menu = Menu::new();
-    menu.append_items(&[&open, &PredefinedMenuItem::separator(), &quit])?;
-    let tray = Rc::new(
-        TrayIconBuilder::new()
-            .with_icon(tray_image()?)
-            .with_tooltip("IDM2")
-            .with_menu(Box::new(menu))
-            .with_menu_on_left_click(false)
-            .build()?,
-    );
-    let (open_id, quit_id) = (open.id().clone(), quit.id().clone());
-    let show_from_menu = show.clone();
-    MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
-        if e.id == quit_id {
-            let _ = slint::quit_event_loop();
-        } else if e.id == open_id {
-            show_from_menu();
+    // Tray (menu bar on macOS): closing the window only hides it; downloads keep running until Quit.
+    // macOS only allows creating it once the event loop runs, so it's made on the loop's first tick.
+    let tray: Rc<RefCell<Option<TrayIcon>>> = Rc::default();
+    Timer::single_shot(Duration::ZERO, {
+        let (tray, show) = (tray.clone(), show.clone());
+        move || match make_tray(show) {
+            Ok(t) => *tray.borrow_mut() = Some(t),
+            Err(e) => eprintln!("can't create the tray icon: {e:#}"),
         }
-    }));
-    TrayIconEvent::set_event_handler(Some(move |e| {
-        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
-            show();
-        }
-    }));
+    });
 
     let rows = Rc::new(VecModel::<Row>::default());
     ui.set_rows(ModelRc::from(rows.clone()));
@@ -153,6 +144,16 @@ pub fn run(open: Option<String>, background: bool) -> Result<()> {
         move |id| {
             if let Some(out) = m.items().into_iter().find(|i| i.id == id as u64).and_then(|i| i.out) {
                 reveal(&out);
+            }
+        }
+    });
+    ui.on_launch({
+        let m = m.clone();
+        move |id| {
+            // Only finished files that are still there; a moved or deleted file does nothing.
+            let done = m.items().into_iter().find(|i| i.id == id as u64 && i.status == Status::Done);
+            if let Some(out) = done.and_then(|i| i.out).filter(|p| p.exists()) {
+                launch(&out);
             }
         }
     });
@@ -223,6 +224,38 @@ fn show_window(ui: &AppWindow) {
     ui.window().set_minimized(false);
 }
 
+fn home_dir() -> PathBuf {
+    PathBuf::from(std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).unwrap_or_default())
+}
+
+/// Tray icon with its menu (Open, Quit); a left click also opens the window.
+fn make_tray(show: impl Fn() + Clone + Send + Sync + 'static) -> Result<TrayIcon> {
+    let open = MenuItem::new("Open IDM2", true, None);
+    let quit = MenuItem::new("Quit", true, None);
+    let menu = Menu::new();
+    menu.append_items(&[&open, &PredefinedMenuItem::separator(), &quit])?;
+    let (open_id, quit_id) = (open.id().clone(), quit.id().clone());
+    let show_from_menu = show.clone();
+    MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
+        if e.id == quit_id {
+            let _ = slint::quit_event_loop();
+        } else if e.id == open_id {
+            show_from_menu();
+        }
+    }));
+    TrayIconEvent::set_event_handler(Some(move |e| {
+        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+            show();
+        }
+    }));
+    Ok(TrayIconBuilder::new()
+        .with_icon(tray_image()?)
+        .with_tooltip("IDM2")
+        .with_menu(Box::new(menu))
+        .with_menu_on_left_click(false)
+        .build()?)
+}
+
 /// Tray icon pixels from the extension's 48 px PNG (RGBA, rendered from ui/logo.svg).
 fn tray_image() -> Result<tray_icon::Icon> {
     let png = include_bytes!("../extension/icons/48.png");
@@ -234,14 +267,16 @@ fn tray_image() -> Result<tray_icon::Icon> {
     Ok(tray_icon::Icon::from_rgba(buf, w, h)?)
 }
 
-fn refresh(ui: &AppWindow, m: &Manager, rows: &VecModel<Row>, tray: &TrayIcon) {
+fn refresh(ui: &AppWindow, m: &Manager, rows: &VecModel<Row>, tray: &RefCell<Option<TrayIcon>>) {
     let items = m.items();
     let active = items.iter().filter(|i| i.status == Status::Downloading);
     let (n, speed) = active.fold((0, 0), |(n, s), i| (n + 1, s + i.speed));
     let summary =
         if n == 0 { format!("{} download{}", items.len(), if items.len() == 1 { "" } else { "s" }) } else { format!("{n} downloading · {}/s", size(speed)) };
     if ui.get_summary() != summary.as_str() {
-        let _ = tray.set_tooltip(Some(format!("IDM2 · {summary}")));
+        if let Some(tray) = tray.borrow().as_ref() {
+            let _ = tray.set_tooltip(Some(format!("IDM2 · {summary}")));
+        }
         ui.set_summary(summary.into());
     }
     let filter = ui.get_filter();
@@ -276,6 +311,7 @@ fn reg(args: &[&str]) -> Result<bool> {
     Ok(out.status.success())
 }
 
+#[cfg(windows)]
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 
 /// Starting with Windows is read from the registry itself, so the switch can't drift from reality.
@@ -297,14 +333,52 @@ fn set_autostart(on: bool) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+/// macOS: a LaunchAgent that opens IDM2 at login, in the menu bar only.
+#[cfg(target_os = "macos")]
+fn launch_agent() -> PathBuf {
+    home_dir().join("Library/LaunchAgents/io.github.saff-elli-khan.idm2.plist")
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_enabled() -> bool {
+    launch_agent().exists()
+}
+
+#[cfg(target_os = "macos")]
+fn set_autostart(on: bool) -> Result<()> {
+    let path = launch_agent();
+    if !on {
+        return match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        };
+    }
+    let exe = std::env::current_exe()?.display().to_string().replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>io.github.saff-elli-khan.idm2</string>
+  <key>ProgramArguments</key><array><string>{exe}</string><string>--background</string></array>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+"#
+    );
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    std::fs::write(&path, plist)?;
+    Ok(())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn autostart_enabled() -> bool {
     false
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn set_autostart(_on: bool) -> Result<()> {
-    anyhow::bail!("only supported on Windows")
+    anyhow::bail!("not supported on this system yet")
 }
 
 /// Makes IDM2 the handler for magnet links and .torrent files, for the current user only.
@@ -442,9 +516,25 @@ fn reveal(p: &Path) {
     let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", p.display())).spawn();
 }
 
+/// Opens a file with its default app (a folder opens in Explorer), like double-clicking it.
+#[cfg(windows)]
+fn launch(p: &Path) {
+    let _ = std::process::Command::new("explorer").arg(p).spawn();
+}
+
 #[cfg(not(windows))]
+fn launch(p: &Path) {
+    let _ = std::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" }).arg(p).spawn();
+}
+
+#[cfg(target_os = "macos")]
+fn reveal(p: &Path) {
+    let _ = std::process::Command::new("open").arg("-R").arg(p).spawn(); // select it in Finder
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn reveal(p: &Path) {
     if let Some(dir) = p.parent() {
-        let _ = std::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" }).arg(dir).spawn();
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
 }
