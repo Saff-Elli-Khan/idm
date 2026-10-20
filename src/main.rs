@@ -5,6 +5,7 @@ mod browser;
 mod engine;
 mod gui;
 mod manager;
+mod torrent;
 
 use anyhow::{bail, Context, Result};
 use std::cell::Cell;
@@ -13,11 +14,17 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-/// `idm` opens the GUI; `idm <url> [-n N] [-o out]` downloads in the terminal.
+/// `idm2` opens the GUI; `idm2 <url> [-n N] [-o out]` downloads in the terminal.
+/// `idm2 <magnet link or .torrent file>` (how Windows launches us for those) opens the GUI with it.
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        return gui::run();
+        return gui::run(None);
+    }
+    if let [src] = args.as_slice() {
+        if torrent::is_torrent(src) {
+            return gui::run(Some(src.clone()));
+        }
     }
     attach_console();
     tokio::runtime::Runtime::new()?.block_on(cli(args))
@@ -44,7 +51,7 @@ async fn cli(args: Vec<String>) -> Result<()> {
             _ => url = Some(a),
         }
     }
-    let url = url.context("usage: idm <url> [-n connections (default 8, max 32)] [-o output]")?;
+    let url = url.context("usage: idm2 <url> [-n connections (default 8, max 32)] [-o output]")?;
     let conns = conns.clamp(1, 32);
 
     let client = engine::client(&[])?;

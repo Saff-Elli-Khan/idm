@@ -1,5 +1,6 @@
 use crate::browser;
 use crate::manager::{Item, Manager, Status};
+use crate::torrent;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
@@ -20,12 +21,13 @@ struct Settings {
 
 const MAX_CONNS: i32 = 32;
 
-pub fn run() -> Result<()> {
+/// `open`: a magnet link or .torrent path Windows launched us with.
+pub fn run(open: Option<String>) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     // Single instance: if our port is taken by a running copy (maybe hidden in the tray), show it and leave.
     // This must happen before the manager starts, or both copies would run the same downloads.
     let listener = rt.block_on(tokio::net::TcpListener::bind(("127.0.0.1", browser::PORT)));
-    if listener.is_err() && rt.block_on(browser::show_running()) {
+    if listener.is_err() && rt.block_on(browser::show_running(open.as_deref())) {
         return Ok(());
     }
     let home = PathBuf::from(std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).unwrap_or_default());
@@ -39,6 +41,9 @@ pub fn run() -> Result<()> {
         .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
         .unwrap_or(Settings { conns: 8, limit_mb: 0.0 });
     let m = Manager::new(rt.handle().clone(), downloads, data.join("downloads.json"), 3, s.conns)?;
+    if let Some(src) = open {
+        m.add(src, vec![]);
+    }
     m.set_limit(mb_to_bytes(s.limit_mb));
 
     let ui = AppWindow::new()?;
@@ -125,12 +130,17 @@ pub fn run() -> Result<()> {
     ui.on_add({
         let (m, refresh) = (m.clone(), refresh.clone());
         move |url| {
-            let url = url.trim();
-            if url.starts_with("http://") || url.starts_with("https://") {
+            // Explorer's "Copy as path" wraps paths in quotes.
+            let url = url.trim().trim_matches('"');
+            if url.starts_with("http://") || url.starts_with("https://") || torrent::is_torrent(url) {
                 m.add(url.into(), vec![]);
                 refresh();
             }
         }
+    });
+    ui.on_register_handlers(|| match register_handlers() {
+        Ok(()) => "Done. If another app still opens them, choose IDM2 in Windows Settings → Default apps.".into(),
+        Err(e) => format!("Couldn't register: {e:#}").into(),
     });
     ui.on_open({
         let m = m.clone();
@@ -239,8 +249,52 @@ fn refresh(ui: &AppWindow, m: &Manager, rows: &VecModel<Row>, tray: &TrayIcon) {
     }
 }
 
+/// Makes IDM2 the handler for magnet links and .torrent files, for the current user only.
+#[cfg(windows)]
+fn register_handlers() -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let exe = std::env::current_exe()?;
+    let open = format!("\"{}\" \"%1\"", exe.display());
+    let icon = format!("\"{}\",0", exe.display());
+    let c = r"HKCU\Software\Classes";
+    let values = [
+        (format!(r"{c}\magnet"), None, "URL:Magnet link"),
+        (format!(r"{c}\magnet"), Some("URL Protocol"), ""),
+        (format!(r"{c}\magnet\DefaultIcon"), None, icon.as_str()),
+        (format!(r"{c}\magnet\shell\open\command"), None, open.as_str()),
+        (format!(r"{c}\.torrent"), None, "IDM2.torrent"),
+        (format!(r"{c}\IDM2.torrent"), None, "Torrent file"),
+        (format!(r"{c}\IDM2.torrent\DefaultIcon"), None, icon.as_str()),
+        (format!(r"{c}\IDM2.torrent\shell\open\command"), None, open.as_str()),
+    ];
+    for (key, name, data) in values {
+        let mut cmd = std::process::Command::new("reg");
+        cmd.args(["add", &key]);
+        match name {
+            Some(n) => cmd.args(["/v", n]),
+            None => cmd.arg("/ve"),
+        };
+        let ok = cmd.args(["/d", data, "/f"]).creation_flags(CREATE_NO_WINDOW).status()?.success();
+        anyhow::ensure!(ok, "couldn't write {key}");
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn register_handlers() -> Result<()> {
+    anyhow::bail!("only supported on Windows")
+}
+
 fn row(i: &Item) -> Row {
-    let name = i.out.as_deref().and_then(Path::file_name).map_or_else(|| i.url.clone(), |n| n.to_string_lossy().into_owned());
+    let is_torrent = torrent::is_torrent(&i.url);
+    // Before a torrent's metadata arrives, show the magnet's display name (dn) or the .torrent file's name.
+    let pending_name = || {
+        let dn = reqwest::Url::parse(&i.url).ok().and_then(|u| u.query_pairs().find(|(k, _)| k == "dn").map(|(_, v)| v.into_owned()));
+        let file = (is_torrent && !i.url.starts_with("magnet:")).then(|| Path::new(&i.url).file_stem().map(|s| s.to_string_lossy().into_owned())).flatten();
+        dn.or(file).unwrap_or_else(|| if i.url.starts_with("magnet:") { "Magnet link".into() } else { i.url.clone() })
+    };
+    let name = i.out.as_deref().and_then(Path::file_name).map_or_else(pending_name, |n| n.to_string_lossy().into_owned());
     let ext = Path::new(&name)
         .extension()
         .map(|e| e.to_string_lossy().to_uppercase())
@@ -251,12 +305,14 @@ fn row(i: &Item) -> Row {
         None => size(i.done),
     };
     let (status, detail) = match i.status {
+        Status::Downloading if is_torrent && i.total.is_none() => ("Downloading", "Finding peers…".into()),
         Status::Downloading => {
             let eta = match i.total {
                 Some(t) if i.speed > 0 => format!(" · {} left", dur(t.saturating_sub(i.done) / i.speed)),
                 _ => String::new(),
             };
-            ("Downloading", format!("{} · {}/s · {} connections{eta}", of(), size(i.speed), i.conns))
+            let links = if is_torrent { "peers" } else { "connections" };
+            ("Downloading", format!("{} · {}/s · {} {links}{eta}", of(), size(i.speed), i.conns))
         }
         Status::Queued => ("Queued", "Waiting for a free slot".into()),
         Status::Paused => ("Paused", of()),
@@ -268,17 +324,28 @@ fn row(i: &Item) -> Row {
         (_, Some(t)) if t > 0 => i.done as f32 / t as f32,
         _ => 0.0,
     };
-    let mut live: Vec<_> = i.segs.iter().filter(|s| s.active).collect();
-    live.sort_by_key(|s| s.start);
-    let connections: Vec<Conn> = live
-        .iter()
-        .enumerate()
-        .map(|(n, s)| Conn {
-            label: format!("Connection {}", n + 1).into(),
-            progress: (s.pos - s.start) as f32 / (s.end - s.start).max(1) as f32,
-            detail: format!("{} / {} · {}/s", size(s.pos - s.start), size(s.end - s.start), size(s.speed)).into(),
-        })
-        .collect();
+    let connections: Vec<Conn> = if is_torrent {
+        // Bar = this peer's share of what we've downloaded.
+        i.peers
+            .iter()
+            .map(|p| Conn {
+                label: p.name.clone().into(),
+                progress: p.fetched as f32 / i.done.max(1) as f32,
+                detail: format!("{} · {} · {}/s", p.addr, size(p.fetched), size(p.speed)).into(),
+            })
+            .collect()
+    } else {
+        let mut live: Vec<_> = i.segs.iter().filter(|s| s.active).collect();
+        live.sort_by_key(|s| s.start);
+        live.iter()
+            .enumerate()
+            .map(|(n, s)| Conn {
+                label: format!("Connection {}", n + 1).into(),
+                progress: (s.pos - s.start) as f32 / (s.end - s.start).max(1) as f32,
+                detail: format!("{} / {} · {}/s", size(s.pos - s.start), size(s.end - s.start), size(s.speed)).into(),
+            })
+            .collect()
+    };
     Row {
         connections: ModelRc::new(VecModel::from(connections)),
         id: i.id as i32,

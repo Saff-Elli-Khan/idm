@@ -23,9 +23,10 @@
 - **Download queue.** Up to 3 downloads run at once and the rest wait their turn. The list survives restarts.
 - **Runs in the background.** Closing the window keeps downloads going; IDM2 lives in the system tray. Hover the tray icon for live progress, click it to reopen the window, or right-click it to quit. Starting IDM2 again brings up the running copy instead of opening a second one.
 - **Browser integration.** One small extension for Chrome, Edge and Firefox sends browser downloads to the app, including cookies and referrer, so downloads that need a login work too. If the app isn't running, the browser simply downloads the file itself.
+- **Torrents.** Download magnet links and `.torrent` files, with a live list of the peers you're downloading from. `.torrent` links clicked in the browser are fetched and started automatically. Seeding stops when a download finishes. IDM2 can also become the Windows handler for magnet links and `.torrent` files.
 - **Automatic retries.** Dropped connections retry with backoff. If a server refuses extra connections, the remaining ones carry on.
 - **Light and dark mode.** Follows your Windows theme.
-- **Command-line mode.** `idm <url>` downloads from the terminal with live progress.
+- **Command-line mode.** `idm2 <url>` downloads from the terminal with live progress.
 
 ## Screenshots
 
@@ -35,9 +36,9 @@
 
 ## Installation
 
-1. Download [`IDM2-0.2.0-windows-x64.zip`](dist/IDM2-0.2.0-windows-x64.zip?raw=1) from the `dist` folder.
+1. Download [`IDM2-0.3.0-windows-x64.zip`](dist/IDM2-0.3.0-windows-x64.zip?raw=1) from the `dist` folder.
 2. Unzip it anywhere, for example `C:\Program Files\IDM2`.
-3. Run `idm.exe`.
+3. Run `idm2.exe`.
 
 The app isn't code-signed yet, so Windows SmartScreen may warn the first time you run it. Click **More info**, then **Run anyway**.
 
@@ -64,7 +65,7 @@ Firefox removes temporary add-ons when it closes, because regular Firefox only i
 
 ### App
 
-- **New download:** paste a link and press Enter. Files are saved to your `Downloads` folder; if a file with the same name exists, the new one is saved as `name (1).ext`.
+- **New download:** paste a link, a magnet link or the path of a `.torrent` file, and press Enter. Files are saved to your `Downloads` folder; if a file with the same name exists, the new one is saved as `name (1).ext`.
 - **Hover a download** for actions: pause, resume, show in folder, delete. Deleting an unfinished download also deletes its partial file; finished files are kept.
 - **Click a download** to expand it and see each connection.
 - **Sidebar:** switch between *All downloads*, *In progress* and *Completed*.
@@ -80,10 +81,20 @@ Firefox removes temporary add-ons when it closes, because regular Firefox only i
 
 Settings are saved automatically.
 
+**Magnet links and .torrent files → Use IDM2** registers IDM2 as the app that opens them, for your Windows account only. After that, clicking a magnet link in any browser, or double-clicking a `.torrent` file, adds it to IDM2. If another torrent app was set as the default, Windows may still ask you to pick IDM2 under **Settings → Apps → Default apps**.
+
+### Torrents
+
+- **Adding:** paste a magnet link or a `.torrent` path into *New download*, click a magnet link (after **Use IDM2**), or download a `.torrent` file from the browser; IDM2 starts it automatically once the file is downloaded.
+- **Peers:** click a torrent to see the peers you're connected to: their app, address, how much they've sent you, and current speed.
+- **Seeding** stops as soon as the download completes.
+- **Safety:** a new torrent never overwrites existing files. If a file with the same name is already in `Downloads`, the torrent fails instead; rename or move the file and resume.
+- **Firewall:** the first torrent opens a listening port so other peers can reach you. Windows Firewall may ask to allow IDM2. IDM2 also asks your router to forward the port (UPnP).
+
 ### Command line
 
 ```text
-idm <url> [-n connections] [-o output]
+idm2 <url> [-n connections] [-o output]
 ```
 
 ```powershell
@@ -92,7 +103,7 @@ idm https://example.com/file.iso -n 16
 
 - Shows progress, speed, connection count and time left in the terminal.
 - Press **Ctrl+C** to pause; run the same command again to resume.
-- Running `idm` with no arguments opens the app.
+- Running `idm2` with no arguments opens the app.
 
 ## How it works
 
@@ -128,8 +139,8 @@ The browser extension talks to the app on `127.0.0.1:47219`. The app accepts req
 Requirements: Rust (stable) and, on Windows, the Visual Studio C++ Build Tools.
 
 ```powershell
-cargo build --release      # target\release\idm.exe
-cargo test                 # engine, queue and browser-endpoint tests
+cargo build --release      # target\release\idm2.exe
+cargo test                 # engine, queue, browser-endpoint and torrent tests
 ```
 
 The tests run against a local HTTP server and cover:
@@ -139,6 +150,7 @@ The tests run against a local HTTP server and cover:
 - the speed limit
 - queue concurrency and saving the list across restarts
 - rejecting requests from websites
+- a real BitTorrent transfer from a local seeder, and refusing to overwrite existing files
 
 ### Project layout
 
@@ -146,6 +158,7 @@ The tests run against a local HTTP server and cover:
 src/
   engine.rs    segmented, resumable HTTP downloader and speed limiter
   manager.rs   download queue, persistence, per-connection speed
+  torrent.rs   magnet / .torrent downloads (librqbit), peer stats
   browser.rs   localhost endpoint for the extension and for single-instance
   gui.rs       connects the UI to the queue; settings; tray icon
   main.rs      GUI or command-line entry point
@@ -161,13 +174,15 @@ CLAUDE.md      context for continuing development with an AI assistant
 ## Known limitations
 
 - **Fixed defaults.** The save folder (`Downloads`) and the number of simultaneous downloads (3) can't be changed yet.
-- **HTTP(S) only.** No FTP, BitTorrent or video-site downloading.
+- **HTTP(S) and BitTorrent only.** No FTP or video-site downloading.
+- **Torrent limits.** There's no seeding, no picking individual files, and no separate upload limit. The speed limit applies to HTTP downloads and to torrents separately. Resuming a torrent re-checks the files already on disk first, which takes a moment for large torrents. Deleting a *paused* multi-file torrent leaves its folder in place.
 - **Firefox add-on isn't signed.** In regular Firefox it has to be reloaded after each restart (see above).
 - **No start with Windows.** IDM2 doesn't launch at login yet.
-- **Default exe icon.** `idm.exe` doesn't carry the app logo in Explorer yet.
+- **Default exe icon.** `idm2.exe` doesn't carry the app logo in Explorer yet.
 
 ## Credits
 
 - UI built with [Slint](https://slint.dev).
 - Icons from [Tabler Icons](https://tabler.io/icons) (MIT).
 - Networking by [reqwest](https://github.com/seanmonstar/reqwest) and [tokio](https://tokio.rs).
+- BitTorrent by [librqbit](https://github.com/ikatson/rqbit) (Apache-2.0).

@@ -80,6 +80,10 @@ impl Limiter {
         self.rate.store(bytes_per_sec, Relaxed);
     }
 
+    pub fn get(&self) -> u64 {
+        self.rate.load(Relaxed)
+    }
+
     /// Waits until `n` more bytes fit under the cap. While we wait we don't read the socket,
     /// so TCP flow control slows the server down too.
     async fn take(&self, n: usize) {

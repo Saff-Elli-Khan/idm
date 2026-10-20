@@ -11,7 +11,7 @@ public class Shot { [DllImport("user32.dll")] public static extern bool GetWindo
 public struct RECT { public int L,T,R,B; } }
 "@
 [Shot]::SetProcessDPIAware() | Out-Null
-$h = (Get-Process idm | Select-Object -First 1).MainWindowHandle
+$h = (Get-Process idm2 | Select-Object -First 1).MainWindowHandle
 $r = New-Object Shot+RECT; [Shot]::GetWindowRect($h, [ref]$r) | Out-Null
 if ($ClickX -ge 0) {
     [Shot]::SetForegroundWindow($h) | Out-Null; Start-Sleep -Milliseconds 300

@@ -1,18 +1,24 @@
 [package]
 name = "idm"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
+
+# The product is IDM2; the crate (and the %APPDATA%\idm data folder) keep the old name.
+[[bin]]
+name = "idm2"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
 axum = "0.8"
 futures-util = "0.3"
+librqbit = { version = "9.0.1", default-features = false, features = ["default-tls"] }
 png = "0.18"
 reqwest = { version = "0.12", features = ["stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 slint = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "net", "sync"] }
 tray-icon = "0.26"
 
 [build-dependencies]

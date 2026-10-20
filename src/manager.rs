@@ -1,7 +1,9 @@
 //! Download queue: runs up to `max_active` downloads at once, persists the list to a JSON file.
 
 use crate::engine::{self, with_ext, Limiter, SegView};
-use anyhow::Result;
+use crate::torrent;
+use anyhow::{Context, Result};
+use librqbit::{AddTorrent, AddTorrentOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -40,6 +42,9 @@ pub struct Item {
     /// Per-range progress of the last run, with per-connection speed.
     #[serde(skip)]
     pub segs: Vec<SegView>,
+    /// Torrents only: the fastest connected peers.
+    #[serde(skip)]
+    pub peers: Vec<torrent::Peer>,
 }
 
 #[derive(Clone)]
@@ -52,6 +57,8 @@ struct Inner {
     db: PathBuf,
     max_active: usize,
     conns: Arc<AtomicUsize>,
+    /// Started on the first torrent, so HTTP-only use never opens BitTorrent ports.
+    torrents: tokio::sync::OnceCell<Arc<librqbit::Session>>,
     st: Mutex<State>,
 }
 
@@ -78,6 +85,7 @@ impl Manager {
             db,
             max_active,
             conns: Arc::new(AtomicUsize::new(conns)),
+            torrents: tokio::sync::OnceCell::new(),
             st: Mutex::new(State { items, stops: HashMap::new() }),
         }));
         m.pump();
@@ -91,6 +99,10 @@ impl Manager {
     /// Bytes per second across all downloads; 0 = unlimited.
     pub fn set_limit(&self, bytes_per_sec: u64) {
         self.0.limit.set(bytes_per_sec);
+        // ponytail: torrents get the same cap separately, so HTTP + torrents together can reach 2x; share one limiter if that matters.
+        if let Some(s) = self.0.torrents.get() {
+            s.ratelimits.set_download_bps(torrent::bps(bytes_per_sec));
+        }
     }
 
     /// Connections per download; applies to running downloads too.
@@ -113,6 +125,7 @@ impl Manager {
             speed: 0,
             conns: 0,
             segs: Vec::new(),
+            peers: Vec::new(),
         });
         drop(st);
         self.pump();
@@ -146,7 +159,16 @@ impl Manager {
         let it = st.items.remove(i);
         match st.stops.get(&id) {
             Some(stop) => stop.store(true, Relaxed), // file is still open; the task cleans up
-            None if it.status != Status::Done => delete_partials(it.out.as_deref()),
+            None if it.status != Status::Done => {
+                delete_partials(it.out.as_deref());
+                // A paused torrent's file is ours (a fresh torrent never overwrites). Folders of
+                // multi-file torrents are left alone: they might hold the user's own files too.
+                if torrent::is_torrent(&it.url) {
+                    if let Some(p) = it.out.as_deref().filter(|p| p.is_file()) {
+                        fs::remove_file(p).ok();
+                    }
+                }
+            }
             None => {}
         }
         self.save(&st);
@@ -178,16 +200,23 @@ impl Manager {
         let r = self.run_inner(id, &url, &mut out, &headers, stop).await;
         let mut st = self.0.st.lock().unwrap();
         st.stops.remove(&id);
+        let mut follow_up = None;
         match st.items.iter_mut().find(|i| i.id == id) {
             None => delete_partials(out.as_deref()), // removed while running
             Some(it) => {
                 (it.speed, it.conns) = (0, 0);
+                it.peers.clear();
                 for s in &mut it.segs {
                     (s.active, s.speed) = (false, 0);
                 }
                 it.status = match r {
                     Ok(true) => {
                         it.headers.clear(); // no reason to keep cookies on disk
+                        // A downloaded .torrent file (e.g. from the browser) starts the torrent itself.
+                        let is_torrent_file = it.out.as_ref().and_then(|p| p.extension()).is_some_and(|e| e.eq_ignore_ascii_case("torrent"));
+                        if is_torrent_file && !torrent::is_torrent(&it.url) {
+                            follow_up = it.out.as_ref().map(|p| p.to_string_lossy().into_owned());
+                        }
                         Status::Done
                     }
                     Ok(false) => Status::Paused,
@@ -199,7 +228,34 @@ impl Manager {
             }
         }
         drop(st);
+        if let Some(src) = follow_up {
+            self.add(src, vec![]);
+        }
         self.pump();
+    }
+
+    async fn run_torrent(&self, id: u64, src: &str, out: &mut Option<PathBuf>, stop: Arc<AtomicBool>) -> Result<bool> {
+        let session = self.0.torrents.get_or_try_init(|| torrent::session(self.0.dir.clone(), self.0.limit.get())).await?;
+        let add = if src.starts_with("magnet:") {
+            AddTorrent::from_url(src)
+        } else {
+            AddTorrent::from_bytes(fs::read(src).with_context(|| format!("can't read {src}"))?)
+        };
+        // Overwriting is allowed only when resuming our own earlier run (`out` is set once the
+        // torrent went live); a fresh torrent must never clobber files already on disk.
+        let opts = AddTorrentOptions { overwrite: out.is_some(), ..Default::default() };
+        let removed = || !self.0.st.lock().unwrap().items.iter().any(|i| i.id == id);
+        torrent::run(session, add, opts, &stop, removed, |p| {
+            let mut st = self.0.st.lock().unwrap();
+            let Some(it) = st.items.iter_mut().find(|i| i.id == id) else { return };
+            (it.done, it.total, it.speed, it.conns, it.peers) = (p.done, p.total, p.speed, p.live_peers, p.peers);
+            if it.out.is_none() && p.out.is_some() {
+                it.out = p.out.clone();
+                *out = p.out;
+                self.save(&st);
+            }
+        })
+        .await
     }
 
     async fn run_inner(
@@ -210,6 +266,9 @@ impl Manager {
         headers: &[(String, String)],
         stop: Arc<AtomicBool>,
     ) -> Result<bool> {
+        if torrent::is_torrent(url) {
+            return self.run_torrent(id, url, out, stop).await;
+        }
         let client = engine::client(headers)?;
         let info = engine::probe(&client, url).await?;
         let path = match out {

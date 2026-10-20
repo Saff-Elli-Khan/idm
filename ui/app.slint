@@ -304,7 +304,7 @@ component RowView inherits Rectangle {
                 spacing: 8px;
                 for c in root.item.connections: HorizontalLayout {
                     spacing: 12px;
-                    Text { width: 96px; text: c.label; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                    Text { width: 112px; text: c.label; color: Theme.muted; font-size: 12px; vertical-alignment: center; overflow: elide; }
                     VerticalLayout {
                         alignment: center;
                         Rectangle {
@@ -374,6 +374,8 @@ export component AppWindow inherits Window {
     in-out property <string> limit-text;
     in-out property <int> conns: 8;
     callback set-conns(int);
+    callback register-handlers() -> string;
+    property <string> handler-status;
     callback refresh();
     callback drag(length, length);
     callback minimize();
@@ -515,6 +517,17 @@ export component AppWindow inherits Window {
                     description: "Load the extension folder in Chrome, Edge or Firefox to send browser downloads here.";
                     Text { text: root.browser-status; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
                 }
+                Rectangle { height: 1px; background: Theme.border; }
+                SettingRow {
+                    icon: @image-url("icons/magnet.svg");
+                    title: "Magnet links and .torrent files";
+                    description: root.handler-status != "" ? root.handler-status
+                        : "Open them with IDM2 from your browser and File Explorer. This replaces any other torrent app for your Windows account.";
+                    PrimaryButton {
+                        text: "Use IDM2";
+                        clicked => { root.handler-status = root.register-handlers(); }
+                    }
+                }
             }
             if root.filter != 3: Flickable {
                 vertical-stretch: 1;
@@ -604,7 +617,7 @@ export component AppWindow inherits Window {
                     IconButton { icon: @image-url("icons/x.svg"); clicked => { root.adding = false; } }
                 }
                 url := Input {
-                    placeholder: "Paste a link…";
+                    placeholder: "Paste a link, magnet link or .torrent file path…";
                     accepted(t) => { root.add(t); root.adding = false; }
                 }
                 HorizontalLayout {

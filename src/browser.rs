@@ -31,10 +31,12 @@ pub async fn serve(m: Manager, listener: TcpListener, show: Arc<dyn Fn() + Send 
     axum::serve(listener, app).await
 }
 
-/// Asks an already-running instance to show its window. `true` if one answered.
-pub async fn show_running() -> bool {
+/// Asks an already-running instance to show its window, and to add `open` (a magnet link or
+/// .torrent path the OS launched us with). `true` if one answered.
+pub async fn show_running(open: Option<&str>) -> bool {
     let url = format!("http://127.0.0.1:{PORT}/show");
-    reqwest::Client::new().post(url).send().await.is_ok_and(|r| r.status().is_success())
+    let body = open.unwrap_or_default().to_string();
+    reqwest::Client::new().post(url).body(body).send().await.is_ok_and(|r| r.status().is_success())
 }
 
 async fn add(State(app): State<App>, h: HeaderMap, Json(a): Json<Add>) -> StatusCode {
@@ -55,11 +57,14 @@ async fn add(State(app): State<App>, h: HeaderMap, Json(a): Json<Add>) -> Status
     StatusCode::OK
 }
 
-async fn show_window(State(app): State<App>, h: HeaderMap) -> StatusCode {
+async fn show_window(State(app): State<App>, h: HeaderMap, open: String) -> StatusCode {
     // Browsers always send an Origin on cross-site POSTs; our own second launch doesn't.
-    // So web pages can't pop the window open.
+    // So web pages can't pop the window open or add torrents.
     if h.contains_key(header::ORIGIN) {
         return StatusCode::FORBIDDEN;
+    }
+    if crate::torrent::is_torrent(&open) {
+        app.m.add(open, vec![]);
     }
     (app.show)();
     StatusCode::OK
