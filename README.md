@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="ui/logo.svg" width="96" alt="Downloader logo">
+  <img src="ui/logo.svg" width="96" alt="IDM2 logo">
 </p>
 
-<h1 align="center">Downloader</h1>
+<h1 align="center">IDM2</h1>
 
 <p align="center">
   A fast, modern download manager for Windows, written in Rust.<br>
@@ -21,7 +21,8 @@
 - **Per-connection progress.** Click a download to see every connection with its own progress bar, bytes and speed.
 - **Global speed limit.** One cap shared by all downloads. It throttles at the network level, so it doesn't just buffer data in memory.
 - **Download queue.** Up to 3 downloads run at once and the rest wait their turn. The list survives restarts.
-- **Browser integration.** A small Chrome/Edge extension sends browser downloads to the app, including cookies and referrer, so downloads that need a login work too. If the app isn't running, the browser simply downloads the file itself.
+- **Runs in the background.** Closing the window keeps downloads going; IDM2 lives in the system tray. Hover the tray icon for live progress, click it to reopen the window, or right-click it to quit. Starting IDM2 again brings up the running copy instead of opening a second one.
+- **Browser integration.** One small extension for Chrome, Edge and Firefox sends browser downloads to the app, including cookies and referrer, so downloads that need a login work too. If the app isn't running, the browser simply downloads the file itself.
 - **Automatic retries.** Dropped connections retry with backoff. If a server refuses extra connections, the remaining ones carry on.
 - **Light and dark mode.** Follows your Windows theme.
 - **Command-line mode.** `idm <url>` downloads from the terminal with live progress.
@@ -34,19 +35,30 @@
 
 ## Installation
 
-1. Download [`Downloader-0.1.0-windows-x64.zip`](dist/Downloader-0.1.0-windows-x64.zip?raw=1) from the `dist` folder.
-2. Unzip it anywhere, for example `C:\Program Files\Downloader`.
+1. Download [`IDM2-0.2.0-windows-x64.zip`](dist/IDM2-0.2.0-windows-x64.zip?raw=1) from the `dist` folder.
+2. Unzip it anywhere, for example `C:\Program Files\IDM2`.
 3. Run `idm.exe`.
 
 The app isn't code-signed yet, so Windows SmartScreen may warn the first time you run it. Click **More info**, then **Run anyway**.
 
-### Browser extension (Chrome or Edge)
+Windows 11 puts new tray icons in the hidden overflow (the **^** next to the clock). To keep IDM2 visible, drag its icon onto the taskbar.
+
+### Browser extension
+
+The same `extension` folder from the zip works in all three browsers. Downloads you start in the browser are then handed to IDM2 while the app is running. **Settings → Browser integration** shows whether the app is listening.
+
+**Chrome or Edge**
 
 1. Open `chrome://extensions` or `edge://extensions`.
 2. Turn on **Developer mode**.
-3. Click **Load unpacked** and select the `extension` folder from the zip.
+3. Click **Load unpacked** and select the `extension` folder.
 
-From then on, downloads you start in the browser are handed to Downloader while the app is open. **Settings → Browser integration** shows whether the app is listening.
+**Firefox** (version 121 or later)
+
+1. Open `about:debugging#/runtime/this-firefox`.
+2. Click **Load Temporary Add-on…** and select `manifest.json` inside the `extension` folder.
+
+Firefox removes temporary add-ons when it closes, because regular Firefox only installs add-ons signed by Mozilla. To keep it installed, use Firefox Developer Edition or Nightly with `xpinstall.signatures.required` set to `false` in `about:config`, or have the add-on signed through addons.mozilla.org.
 
 ## Usage
 
@@ -57,6 +69,7 @@ From then on, downloads you start in the browser are handed to Downloader while 
 - **Click a download** to expand it and see each connection.
 - **Sidebar:** switch between *All downloads*, *In progress* and *Completed*.
 - **Window:** drag the top strip to move it, double-click to maximize.
+- **Closing** the window hides IDM2 to the tray and downloads continue. To exit completely, right-click the tray icon and choose **Quit**. Unfinished downloads resume on the next start.
 
 ### Settings
 
@@ -133,24 +146,24 @@ The tests run against a local HTTP server and cover:
 src/
   engine.rs    segmented, resumable HTTP downloader and speed limiter
   manager.rs   download queue, persistence, per-connection speed
-  browser.rs   localhost endpoint for the browser extension
-  gui.rs       connects the UI to the queue; settings
+  browser.rs   localhost endpoint for the extension and for single-instance
+  gui.rs       connects the UI to the queue; settings; tray icon
   main.rs      GUI or command-line entry point
 ui/
   app.slint    the whole interface (Slint)
   logo.svg     app logo
   icons/       Tabler icons
-extension/     Chrome/Edge extension (Manifest V3)
+extension/     Chrome, Edge and Firefox extension (Manifest V3)
 tools/         dev helpers (window screenshot script)
 CLAUDE.md      context for continuing development with an AI assistant
 ```
 
 ## Known limitations
 
-- **No tray icon.** Closing the window stops downloads; they resume on the next launch.
 - **Fixed defaults.** The save folder (`Downloads`) and the number of simultaneous downloads (3) can't be changed yet.
 - **HTTP(S) only.** No FTP, BitTorrent or video-site downloading.
-- **Chrome and Edge only.** There's no Firefox extension.
+- **Firefox add-on isn't signed.** In regular Firefox it has to be reloaded after each restart (see above).
+- **No start with Windows.** IDM2 doesn't launch at login yet.
 - **Default exe icon.** `idm.exe` doesn't carry the app logo in Explorer yet.
 
 ## Credits

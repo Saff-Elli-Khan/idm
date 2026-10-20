@@ -2,10 +2,13 @@ use crate::browser;
 use crate::manager::{Item, Manager, Status};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use slint::{Model, ModelRc, Timer, TimerMode, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 slint::include_modules!();
 
@@ -19,6 +22,12 @@ const MAX_CONNS: i32 = 32;
 
 pub fn run() -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
+    // Single instance: if our port is taken by a running copy (maybe hidden in the tray), show it and leave.
+    // This must happen before the manager starts, or both copies would run the same downloads.
+    let listener = rt.block_on(tokio::net::TcpListener::bind(("127.0.0.1", browser::PORT)));
+    if listener.is_err() && rt.block_on(browser::show_running()) {
+        return Ok(());
+    }
     let home = PathBuf::from(std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).unwrap_or_default());
     let data = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| home.join(".config")).join("idm");
     let downloads = home.join("Downloads");
@@ -46,13 +55,47 @@ pub fn run() -> Result<()> {
             }
         }
     };
-    ui.set_browser_status(match rt.block_on(tokio::net::TcpListener::bind(("127.0.0.1", browser::PORT))) {
+    let show = {
+        let ui = ui.as_weak();
+        move || {
+            let _ = ui.upgrade_in_event_loop(|ui| show_window(&ui));
+        }
+    };
+    ui.set_browser_status(match listener {
         Ok(l) => {
-            rt.spawn(browser::serve(m.clone(), l));
+            rt.spawn(browser::serve(m.clone(), l, Arc::new(show.clone())));
             "On".into()
         }
         Err(e) => format!("Off: {e}").into(),
     });
+
+    // Tray: closing the window only hides it; downloads keep running until Quit.
+    let open = MenuItem::new("Open IDM2", true, None);
+    let quit = MenuItem::new("Quit", true, None);
+    let menu = Menu::new();
+    menu.append_items(&[&open, &PredefinedMenuItem::separator(), &quit])?;
+    let tray = Rc::new(
+        TrayIconBuilder::new()
+            .with_icon(tray_image()?)
+            .with_tooltip("IDM2")
+            .with_menu(Box::new(menu))
+            .with_menu_on_left_click(false)
+            .build()?,
+    );
+    let (open_id, quit_id) = (open.id().clone(), quit.id().clone());
+    let show_from_menu = show.clone();
+    MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
+        if e.id == quit_id {
+            let _ = slint::quit_event_loop();
+        } else if e.id == open_id {
+            show_from_menu();
+        }
+    }));
+    TrayIconEvent::set_event_handler(Some(move |e| {
+        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+            show();
+        }
+    }));
 
     let rows = Rc::new(VecModel::<Row>::default());
     ui.set_rows(ModelRc::from(rows.clone()));
@@ -60,7 +103,7 @@ pub fn run() -> Result<()> {
         let (ui, m) = (ui.as_weak(), m.clone());
         move || {
             if let Some(ui) = ui.upgrade() {
-                refresh(&ui, &m, &rows);
+                refresh(&ui, &m, &rows, &tray);
             }
         }
     };
@@ -117,8 +160,11 @@ pub fn run() -> Result<()> {
             ui.window().set_maximized(!ui.window().is_maximized());
         }
     });
-    ui.on_close_window(|| {
-        let _ = slint::quit_event_loop();
+    let win = ui.as_weak();
+    ui.on_close_window(move || {
+        if let Some(ui) = win.upgrade() {
+            let _ = ui.hide(); // keeps running in the tray
+        }
     });
     ui.on_set_conns({
         let (m, win, save) = (m.clone(), ui.as_weak(), save.clone());
@@ -136,19 +182,40 @@ pub fn run() -> Result<()> {
         save();
     });
 
-    ui.run()?;
+    // Hidden windows (closed to tray, Alt+F4) don't end the event loop; only Quit does.
+    ui.show()?;
+    slint::run_event_loop_until_quit()?;
     Ok(())
 }
 
-fn refresh(ui: &AppWindow, m: &Manager, rows: &VecModel<Row>) {
+fn show_window(ui: &AppWindow) {
+    // Hide + show brings it to the front even if it was merely behind other windows.
+    let _ = ui.hide();
+    let _ = ui.show();
+    ui.window().set_minimized(false);
+}
+
+/// Tray icon pixels from the extension's 48 px PNG (RGBA, rendered from ui/logo.svg).
+fn tray_image() -> Result<tray_icon::Icon> {
+    let png = include_bytes!("../extension/icons/48.png");
+    let mut r = png::Decoder::new(std::io::Cursor::new(&png[..])).read_info()?;
+    let (w, h) = (r.info().width, r.info().height);
+    anyhow::ensure!(r.info().color_type == png::ColorType::Rgba, "tray icon must be an RGBA PNG");
+    let mut buf = vec![0; (w * h * 4) as usize];
+    r.next_frame(&mut buf)?;
+    Ok(tray_icon::Icon::from_rgba(buf, w, h)?)
+}
+
+fn refresh(ui: &AppWindow, m: &Manager, rows: &VecModel<Row>, tray: &TrayIcon) {
     let items = m.items();
     let active = items.iter().filter(|i| i.status == Status::Downloading);
     let (n, speed) = active.fold((0, 0), |(n, s), i| (n + 1, s + i.speed));
-    ui.set_summary(
-        if n == 0 {
-            format!("{} download{}", items.len(), if items.len() == 1 { "" } else { "s" })
-        } else { format!("{n} downloading · {}/s", size(speed)) }.into(),
-    );
+    let summary =
+        if n == 0 { format!("{} download{}", items.len(), if items.len() == 1 { "" } else { "s" }) } else { format!("{n} downloading · {}/s", size(speed)) };
+    if ui.get_summary() != summary.as_str() {
+        let _ = tray.set_tooltip(Some(format!("IDM2 · {summary}")));
+        ui.set_summary(summary.into());
+    }
     let filter = ui.get_filter();
     let new: Vec<Row> = items
         .iter()

@@ -1,4 +1,6 @@
-# Downloader (crate `idm`): context for continuing development
+# IDM2 (crate `idm`): context for continuing development
+
+**IDM2** is the product name; use it everywhere users see a name (window title, sidebar, tray, extension, README, release zip). The crate, the exe (`idm.exe`), the CLI command and the data folder (`%APPDATA%\idm`) keep `idm`.
 
 An IDM-style download manager for Windows in Rust: a segmented, resumable HTTP engine with a Slint GUI. See README.md for user-facing docs.
 
@@ -7,7 +9,7 @@ An IDM-style download manager for Windows in Rust: a segmented, resumable HTTP e
 - **Main goal: download speed equal to or better than IDM.** Engine performance comes before features.
 - **Keep it minimal.** The owner prefers the smallest working change: stdlib first, no speculative abstractions, few files. Mark deliberate shortcuts with a `ponytail:` comment naming the limit and the upgrade path.
 - **UI style is Notion.** Neutral greys, Segoe UI, 1px dividers, no heavy shadows, row actions revealed on hover, Tabler icons. Main progress bars are blue; per-connection bars are orange (`Theme.conn`).
-- **Scope:** engine, queue, global speed limit, browser integration, GUI. A scheduler, categories and a tray icon were cut; ask before adding them.
+- **Scope:** engine, queue, global speed limit, browser integration (Chrome, Edge, Firefox), GUI, background running in the tray. A scheduler and categories were cut; ask before adding them.
 
 ## Layout
 
@@ -15,12 +17,19 @@ An IDM-style download manager for Windows in Rust: a segmented, resumable HTTP e
 | --- | --- |
 | `src/engine.rs` | `probe`, `download`, `Limiter`, `SegView`. Contains the segment algorithm and the main engine test. |
 | `src/manager.rs` | Queue (`max_active` = 3), `downloads.json` persistence, per-connection speed, `set_conns` / `set_limit`. |
-| `src/browser.rs` | axum `POST /add` on `127.0.0.1:47219`; accepts only `chrome-extension://` or `moz-extension://` origins. |
-| `src/gui.rs` | Connects Slint to the manager; refreshes rows every 500 ms; `settings.json`; window controls. |
+| `src/browser.rs` | axum on `127.0.0.1:47219`. `POST /add` accepts only `chrome-extension://` or `moz-extension://` origins. `POST /show` (single instance) accepts only requests *without* an `Origin`, so web pages can't trigger it. |
+| `src/gui.rs` | Connects Slint to the manager; refreshes rows every 500 ms; `settings.json`; window controls; tray icon. See "Background running" below. |
 | `src/main.rs` | No arguments opens the GUI; `idm <url> [-n N] [-o out]` runs the CLI. Release builds are GUI-subsystem; the CLI calls `AttachConsole`. |
 | `ui/app.slint` | The whole UI: `Theme` global, `RowView`, `SettingRow`, `AppWindow`. `filter`: 0 = all, 1 = in progress, 2 = completed, 3 = settings page. |
 | `ui/logo.svg` | The logo. `extension/icons/*.png` are rendered from it. |
-| `extension/` | MV3 extension: catches `downloads.onCreated`, posts url, cookies, referrer and user agent, and cancels the browser's copy only if the app returns 200. |
+| `extension/` | One MV3 extension for Chrome, Edge and Firefox. It catches `downloads.onCreated`, posts url, cookies, referrer and user agent, and cancels the browser's copy only if the app returns 200. The manifest lists both `background.service_worker` (Chromium) and `background.scripts` (Firefox), plus `browser_specific_settings.gecko` (id, min 121, `data_collection_permissions: none`). The JS uses `globalThis.browser ?? chrome`. |
+
+## Background running
+
+- **Event loop.** `ui.show()` + `slint::run_event_loop_until_quit()`. Hiding the window (close button, Alt+F4) doesn't end the loop; only the tray's **Quit** calls `quit_event_loop`.
+- **Tray.** `tray-icon` with a muda menu: *Open IDM2*, separator, *Quit*. Left click opens the window. The tooltip shows the summary line. The icon pixels come from `extension/icons/48.png` (decoded with the `png` crate). Event handlers run off the UI thread, so they use `Weak::upgrade_in_event_loop`.
+- **Single instance.** `gui::run` binds the port *before* creating the manager. If the bind fails and `POST /show` succeeds, a copy is already running, so this launch exits. Otherwise the second copy would run the same downloads twice.
+- **Bringing the window forward.** `show_window` calls hide then show so the window comes to the front.
 | `tools/screenshot.ps1` | Captures (and optionally clicks in) the running app window, for checking UI changes. |
 
 ## Engine invariants (don't break)
@@ -47,7 +56,7 @@ cargo build --release      # target\release\idm.exe (stop the running app first;
 ```
 
 - **Stuck build.** If a build sits at "Blocking waiting for file lock", VS Code's rust-analyzer `cargo check` may be hung. Kill that `cargo check` process.
-- **Release zip.** Copy `idm.exe` and `extension/` into `dist/Downloader-<ver>-windows-x64/` and zip it. The zip is committed to git (the owner chose this over GitHub Releases); the staging folder is gitignored. Update the README download link to the new version.
+- **Release zip.** Copy `idm.exe` and `extension/` into `dist/IDM2-<ver>-windows-x64/` and zip it. Keep `Cargo.toml` and `extension/manifest.json` versions in sync. The zip is committed to git (the owner chose this over GitHub Releases); the staging folder is gitignored. Update the README download link to the new version.
 
 ## Testing the UI
 
@@ -63,6 +72,17 @@ Coordinates are physical pixels; at the owner's display scale, 1 logical px is a
 Before typing with `SendKeys`, check that the foreground window belongs to `idm`; otherwise the keystrokes go to another app.
 
 For clean demo screenshots, start a second instance with `APPDATA` and `USERPROFILE` pointing at a temp folder, and pre-fill `downloads.json` there.
+
+**Tray icon.** Windows 11 puts it in the hidden overflow (the **^** next to the clock). Clicking tray menus through screen automation is unreliable; ask the owner to check those by hand.
+
+**Testing the Firefox extension end to end** (Firefox is installed; run while the app is running):
+
+```powershell
+npx.cmd -y web-ext@8 lint --source-dir extension      # expect 0 errors; 1 warning about service_worker is by design
+npx.cmd -y web-ext@8 run --source-dir extension --no-reload --firefox "$env:ProgramFiles\Mozilla Firefox\firefox.exe" --start-url https://mirror.nforce.com/pub/speedtests/10mb.bin
+```
+
+Then check that `%APPDATA%\idm\downloads.json` gained the URL with a `User-Agent` header. Use `npx.cmd`, not `npx`: `Start-Process` can't launch `npx` directly. Killing `web-ext` leaves its Firefox open, so close the Firefox processes it started (check first whether the owner has their own Firefox open).
 
 **Rendering SVGs:** use Edge headless (`msedge --headless --screenshot`). It caches `file://` images by name, so give each new SVG a new file name. Its minimum window is about 500 px, so crop the result.
 
@@ -91,13 +111,16 @@ For clean demo screenshots, start a second instance with `APPDATA` and `USERPROF
   - Lesson: abstract circle-and-line marks get read as other symbols, so keep "download" unambiguous.
 - **Per-connection view:** the file-map bar was removed at the owner's request. Only per-connection rows remain, and their numbers are relative to each connection's own range.
 - **Settings page:** holds connections per download (1–32, default 8), the speed limit (MB/s), and browser status.
+- **Name:** the app was renamed from "Downloader" to **IDM2** at the owner's request (v0.2.0).
+- **Release zips** are committed to the repo under `dist/` (the owner chose this over GitHub Releases).
 
 ## Backlog / known limitations
 
-- No tray icon. Closing the window stops downloads, which resume on the next launch.
+- No start with Windows (login autostart) yet.
+- The tray menu (Open, Quit) has been tested only by its code path, not by clicking it.
 - The save folder (`Downloads`) and simultaneous downloads (3) are hard-coded; they are candidates for the Settings page.
 - `idm.exe` has no embedded icon; it needs an `.ico` and a resource step in `build.rs`.
 - Adaptive connections are not done yet: backing off to what a server accepts when it refuses extra connections.
 - `Content-Disposition` `filename*=` (RFC 5987) isn't parsed, and URL-derived names aren't percent-decoded.
-- Only Chrome and Edge are supported (no Firefox build), and the exe isn't code-signed.
+- The Firefox add-on isn't signed by Mozilla, so it loads only temporarily in regular Firefox. The exe isn't code-signed either.
 - No real head-to-head speed comparison against IDM on the same file has been done yet.

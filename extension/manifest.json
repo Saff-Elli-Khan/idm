@@ -1,10 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "IDM (Rust) integration",
-  "version": "0.1.0",
-  "description": "Hands browser downloads to the IDM desktop app.",
+  "name": "IDM2 integration",
+  "version": "0.2.0",
+  "description": "Hands browser downloads to the IDM2 desktop app.",
   "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
   "permissions": ["downloads", "cookies"],
   "host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "background.js" }
+  "background": { "service_worker": "background.js", "scripts": ["background.js"] },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "downloader@saff-elli-khan.github.io",
+      "strict_min_version": "121.0",
+      "data_collection_permissions": { "required": ["none"] }
+    }
+  }
 }

@@ -382,7 +382,7 @@ export component AppWindow inherits Window {
     property <bool> adding;
 
     no-frame: true;
-    title: "Downloader";
+    title: "IDM2";
     icon: @image-url("logo.svg");
     preferred-width: 1040px;
     preferred-height: 660px;
@@ -405,7 +405,7 @@ export component AppWindow inherits Window {
                     padding-bottom: 16px;
                     spacing: 10px;
                     Image { source: @image-url("logo.svg"); width: 24px; height: 24px; }
-                    Text { text: "Downloader"; color: Theme.text; font-weight: 600; vertical-alignment: center; }
+                    Text { text: "IDM2"; color: Theme.text; font-weight: 600; vertical-alignment: center; }
                 }
                 NavItem {
                     icon: @image-url("icons/list.svg");
@@ -512,7 +512,7 @@ export component AppWindow inherits Window {
                 SettingRow {
                     icon: @image-url("icons/plug-connected.svg");
                     title: "Browser integration";
-                    description: "Load the extension folder in Chrome or Edge to send browser downloads here.";
+                    description: "Load the extension folder in Chrome, Edge or Firefox to send browser downloads here.";
                     Text { text: root.browser-status; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
                 }
             }

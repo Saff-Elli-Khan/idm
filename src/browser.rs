@@ -1,4 +1,5 @@
-//! Localhost endpoint the browser extension posts downloads to.
+//! Localhost endpoint: the browser extension posts downloads to `/add`, and a second app launch
+//! posts to `/show` to bring up the already-running window instead of starting a duplicate.
 
 use crate::manager::Manager;
 use axum::extract::State;
@@ -6,6 +7,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 
 pub const PORT: u16 = 47219;
@@ -18,11 +20,24 @@ struct Add {
     user_agent: Option<String>,
 }
 
-pub async fn serve(m: Manager, listener: TcpListener) -> std::io::Result<()> {
-    axum::serve(listener, Router::new().route("/add", post(add)).with_state(m)).await
+#[derive(Clone)]
+struct App {
+    m: Manager,
+    show: Arc<dyn Fn() + Send + Sync>,
 }
 
-async fn add(State(m): State<Manager>, h: HeaderMap, Json(a): Json<Add>) -> StatusCode {
+pub async fn serve(m: Manager, listener: TcpListener, show: Arc<dyn Fn() + Send + Sync>) -> std::io::Result<()> {
+    let app = Router::new().route("/add", post(add)).route("/show", post(show_window)).with_state(App { m, show });
+    axum::serve(listener, app).await
+}
+
+/// Asks an already-running instance to show its window. `true` if one answered.
+pub async fn show_running() -> bool {
+    let url = format!("http://127.0.0.1:{PORT}/show");
+    reqwest::Client::new().post(url).send().await.is_ok_and(|r| r.status().is_success())
+}
+
+async fn add(State(app): State<App>, h: HeaderMap, Json(a): Json<Add>) -> StatusCode {
     // Only extensions may add downloads; any web page can reach localhost, but it can't fake its Origin.
     // (Json also rejects non-JSON bodies, so a page can't sneak in a preflight-free form POST.)
     let origin = h.get(header::ORIGIN).and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -36,31 +51,51 @@ async fn add(State(m): State<Manager>, h: HeaderMap, Json(a): Json<Add>) -> Stat
         .into_iter()
         .filter_map(|(k, v)| Some((k.to_string(), v.filter(|v| !v.is_empty())?)))
         .collect();
-    m.add(a.url, headers);
+    app.m.add(a.url, headers);
+    StatusCode::OK
+}
+
+async fn show_window(State(app): State<App>, h: HeaderMap) -> StatusCode {
+    // Browsers always send an Origin on cross-site POSTs; our own second launch doesn't.
+    // So web pages can't pop the window open.
+    if h.contains_key(header::ORIGIN) {
+        return StatusCode::FORBIDDEN;
+    }
+    (app.show)();
     StatusCode::OK
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::runtime::Handle;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn only_extensions_can_add() {
+    async fn only_extensions_can_add_and_only_the_app_can_show() {
         let dir = std::env::temp_dir().join(format!("idm-browser-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let m = Manager::new(Handle::current(), dir.clone(), dir.join("db.json"), 1, 1).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/add", listener.local_addr().unwrap());
-        tokio::spawn(serve(m.clone(), listener));
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let shown = Arc::new(AtomicUsize::new(0));
+        let s = shown.clone();
+        tokio::spawn(serve(m.clone(), listener, Arc::new(move || {
+            s.fetch_add(1, Ordering::Relaxed);
+        })));
 
         let body = serde_json::json!({ "url": "http://127.0.0.1:1/x.bin", "cookies": "a=b" });
-        let post = |origin: &'static str| reqwest::Client::new().post(&url).header("Origin", origin).json(&body).send();
-        assert_eq!(post("https://evil.example").await.unwrap().status(), 403);
+        let add = |origin: &'static str| reqwest::Client::new().post(format!("{base}/add")).header("Origin", origin).json(&body).send();
+        assert_eq!(add("https://evil.example").await.unwrap().status(), 403);
         assert!(m.items().is_empty());
-        assert_eq!(post("chrome-extension://abc").await.unwrap().status(), 200);
+        assert_eq!(add("chrome-extension://abc").await.unwrap().status(), 200);
         let items = m.items();
         assert!(items.len() == 1 && items[0].headers == [("Cookie".to_string(), "a=b".to_string())]);
+
+        let show = || reqwest::Client::new().post(format!("{base}/show"));
+        assert_eq!(show().header("Origin", "https://evil.example").send().await.unwrap().status(), 403);
+        assert_eq!(show().send().await.unwrap().status(), 200);
+        assert_eq!(shown.load(Ordering::Relaxed), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

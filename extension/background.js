@@ -1,10 +1,12 @@
+// Runs in Chrome/Edge (service worker) and Firefox (background script).
+const api = globalThis.browser ?? chrome; // Firefox's `browser` returns promises everywhere
 const APP = "http://127.0.0.1:47219/add"; // keep in sync with browser::PORT
 
-chrome.downloads.onCreated.addListener(async (item) => {
-  const url = item.finalUrl || item.url;
+api.downloads.onCreated.addListener(async (item) => {
+  const url = item.finalUrl || item.url; // Firefox has no finalUrl
   if (!/^https?:/.test(url)) return; // blob:/data: downloads stay in the browser
   try {
-    const cookies = await chrome.cookies.getAll({ url });
+    const cookies = await api.cookies.getAll({ url });
     const res = await fetch(APP, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -19,6 +21,6 @@ chrome.downloads.onCreated.addListener(async (item) => {
   } catch {
     return; // app not running: the browser keeps the download
   }
-  await chrome.downloads.cancel(item.id);
-  chrome.downloads.erase({ id: item.id });
+  await api.downloads.cancel(item.id);
+  api.downloads.erase({ id: item.id });
 });
