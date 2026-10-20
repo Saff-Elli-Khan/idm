@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="dist/IDM2-0.4.0-windows-x64.zip?raw=1"><b>⬇ Download IDM2 0.4.0 for Windows (64-bit)</b></a>
+  <a href="dist/IDM2-0.4.1-windows-x64.zip?raw=1"><b>⬇ Download IDM2 0.4.1 for Windows (64-bit)</b></a>
 </p>
 
 ![Downloads list with per-connection progress](docs/screenshots/downloads.png)
@@ -41,7 +41,7 @@
 
 ## Installation
 
-1. Download [`IDM2-0.4.0-windows-x64.zip`](dist/IDM2-0.4.0-windows-x64.zip?raw=1) from the `dist` folder.
+1. Download [`IDM2-0.4.1-windows-x64.zip`](dist/IDM2-0.4.1-windows-x64.zip?raw=1) from the `dist` folder.
 2. Unzip it anywhere, for example `C:\Program Files\IDM2`.
 3. Run `idm2.exe`.
 
@@ -51,7 +51,7 @@ Windows 11 puts new tray icons in the hidden overflow (the **^** next to the clo
 
 ### Browser extension
 
-The same `extension` folder from the zip works in all three browsers. Downloads you start in the browser are then handed to IDM2 while the app is running. **Settings → Browser integration** shows whether the app is listening.
+The zip has two extension folders: `extension` for Chrome and Edge, and `extension-firefox` for Firefox. Downloads you start in the browser are then handed to IDM2 while the app is running. **Settings → Browser integration** shows whether the app is listening.
 
 **Chrome or Edge**
 
@@ -62,7 +62,7 @@ The same `extension` folder from the zip works in all three browsers. Downloads 
 **Firefox** (version 121 or later)
 
 1. Open `about:debugging#/runtime/this-firefox`.
-2. Click **Load Temporary Add-on…** and select `manifest.json` inside the `extension` folder.
+2. Click **Load Temporary Add-on…** and select `manifest.json` inside the `extension-firefox` folder.
 
 Firefox removes temporary add-ons when it closes, because regular Firefox only installs add-ons signed by Mozilla. To keep it installed, use Firefox Developer Edition or Nightly with `xpinstall.signatures.required` set to `false` in `about:config`, or have the add-on signed through addons.mozilla.org.
 
@@ -172,8 +172,8 @@ ui/
   app.slint    the whole interface (Slint)
   logo.svg     app logo
   icons/       Tabler icons
-extension/     Chrome, Edge and Firefox extension (Manifest V3)
-tools/         dev helpers (window screenshot script)
+extension/     browser extension (Manifest V3): manifest.json for Chrome/Edge, manifest.firefox.json for Firefox
+tools/         release.ps1 (builds the release zip), screenshot.ps1 (UI checks)
 CLAUDE.md      context for continuing development with an AI assistant
 ```
 

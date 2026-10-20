@@ -23,7 +23,7 @@ An IDM-style download manager for Windows in Rust: a segmented, resumable HTTP e
 | `src/main.rs` | No arguments opens the GUI; a single magnet link or `.torrent` path (how Windows launches us for those) opens the GUI with it; `idm2 <url> [-n N] [-o out]` runs the CLI. Release builds are GUI-subsystem; the CLI calls `AttachConsole`. |
 | `ui/app.slint` | The whole UI: `Theme` global, `RowView`, `SettingRow`, `AppWindow`. `filter`: 0 = all, 1 = in progress, 2 = completed, 3 = settings page. |
 | `ui/logo.svg` | The logo. `extension/icons/*.png` are rendered from it. |
-| `extension/` | One MV3 extension for Chrome, Edge and Firefox. It catches `downloads.onCreated`, posts url, cookies, referrer and user agent, and cancels the browser's copy only if the app returns 200. The manifest lists both `background.service_worker` (Chromium) and `background.scripts` (Firefox), plus `browser_specific_settings.gecko` (id, min 121, `data_collection_permissions: none`). The JS uses `globalThis.browser ?? chrome`. |
+| `extension/` | MV3 extension. It catches `downloads.onCreated`, posts url, cookies, referrer and user agent, and cancels the browser's copy only if the app returns 200. `background.js` and `icons/` are shared by two manifests: `manifest.json` for Chrome and Edge (`service_worker` only) and `manifest.firefox.json` for Firefox (`background.scripts` plus `browser_specific_settings.gecko`: id, min 121, `data_collection_permissions: none`). Don't merge them: Chrome warns about `background.scripts` and the gecko key. `tools/release.ps1` packages them as `extension/` and `extension-firefox/`. The JS uses `globalThis.browser ?? chrome`. |
 
 ## Torrents (don't break)
 
@@ -69,10 +69,11 @@ cargo build --release      # target\release\idm2.exe (stop the running app first
 
 - **Stuck build.** If a build sits at "Blocking waiting for file lock", VS Code's rust-analyzer `cargo check` may be hung. Kill that `cargo check` process.
 - **Release checklist (every new version):**
-  1. Bump the version in `Cargo.toml` and `extension/manifest.json`; they stay in sync.
-  2. `cargo build --release`, then copy `idm2.exe` and `extension/` into `dist/IDM2-<ver>-windows-x64/` and zip it.
-  3. **Update both README download links:** the "Download IDM2 <ver>" link at the top and the Installation step. The owner requires this for every version.
+  1. Bump the version in `Cargo.toml`, `extension/manifest.json` and `extension/manifest.firefox.json`.
+  2. **Update both README download links:** the "Download IDM2 <ver>" link at the top and the Installation step. The owner requires this for every version.
+  3. Run `tools\release.ps1`. It refuses if the versions or README links don't match, or if that version's zip already exists. It builds and writes `dist\IDM2-<ver>-windows-x64.zip` containing `idm2.exe`, `extension\` (Chrome/Edge) and `extension-firefox\`.
   4. Commit the zip (the owner chose committed zips over GitHub Releases; the staging folder is gitignored). Never modify an already-released zip; make a new version instead.
+- **Static C runtime.** `.cargo/config.toml` sets `+crt-static`, so `idm2.exe` doesn't need the Visual C++ Redistributable (without it, other PCs show "VCRUNTIME140.dll was not found"). Check with `dumpbin /dependents target\release\idm2.exe`: no `VCRUNTIME*`, `MSVCP*` or `api-ms-win-crt-*` should appear.
 
 ## Testing the UI
 
@@ -94,8 +95,9 @@ For clean demo screenshots, start a second instance with `APPDATA` and `USERPROF
 **Testing the Firefox extension end to end** (Firefox is installed; run while the app is running):
 
 ```powershell
-npx.cmd -y web-ext@8 lint --source-dir extension      # expect 0 errors; 1 warning about service_worker is by design
-npx.cmd -y web-ext@8 run --source-dir extension --no-reload --firefox "$env:ProgramFiles\Mozilla Firefox\firefox.exe" --start-url https://mirror.nforce.com/pub/speedtests/10mb.bin
+# Firefox needs the Firefox manifest: use the extension-firefox folder from a packaged release (tools\release.ps1).
+npx.cmd -y web-ext@8 lint --source-dir dist\IDM2-<ver>-windows-x64\extension-firefox      # expect 0 errors, 0 warnings
+npx.cmd -y web-ext@8 run --source-dir dist\IDM2-<ver>-windows-x64\extension-firefox --no-reload --firefox "$env:ProgramFiles\Mozilla Firefox\firefox.exe" --start-url https://mirror.nforce.com/pub/speedtests/10mb.bin
 ```
 
 Then check that `%APPDATA%\idm\downloads.json` gained the URL with a `User-Agent` header. Use `npx.cmd`, not `npx`: `Start-Process` can't launch `npx` directly. Killing `web-ext` leaves its Firefox open, so close the Firefox processes it started (check first whether the owner has their own Firefox open).
